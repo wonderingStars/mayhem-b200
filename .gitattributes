@@ -1,0 +1,11 @@
+# Batch files are parsed by cmd.exe, which mis-reads LF-only files and eats the
+# first character of each line. Force CRLF on checkout and in the working tree.
+*.cmd text eol=crlf
+*.bat text eol=crlf
+
+# Everything else is normalised to LF in the repository.
+*.cpp text eol=lf
+*.hpp text eol=lf
+*.txt text eol=lf
+*.md  text eol=lf
+*.cmake text eol=lf
