@@ -15,8 +15,10 @@
 
 namespace app {
 
-/* Project version, shown here and in the window title. */
-constexpr const char* kVersion = "0.1.0";
+/* Project version, shown here and in the window title.
+ * 0.9.0: full Mayhem app suite ported (~100 apps across all categories),
+ * software-complete and tested, not yet verified against a physical B200. */
+constexpr const char* kVersion = "0.9.0";
 
 class AboutView : public ui::View {
    public:

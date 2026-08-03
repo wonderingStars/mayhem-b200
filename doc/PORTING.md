@@ -51,6 +51,43 @@ MSVC 2022 Build Tools, C++20. Sources are globbed per directory, so **adding a
 | `src/core/` | string formatting, paths, file formats |
 | `tests/` | one `test_*.cpp` per area, auto-globbed |
 
+## Registering an app (READ THIS — it is how your app appears in the menu)
+
+Apps self-register. There is no central list to edit. In your app's `.cpp`, after
+the `namespace app { ... }` block that defines the view, add:
+
+```cpp
+#include "app_registry.hpp"
+#include "bitmaps.hpp"
+
+namespace {
+const app::Registrar reg_myapp{{
+    "myapp",                    // id: the upstream short name (e.g. "adsbrx")
+    "My App",                   // display name shown on the tile
+    app::Category::Receive,     // Receive/Transmit/Transceiver/Utilities/Games/Settings/Home/Debug
+    ui::Color::green(),         // tile colour (green=RX, follow upstream's iconColor)
+    &ui::bitmap_icon_adsb,      // icon from bitmaps.hpp, or nullptr for a generic tile
+    [] { return std::make_unique<app::MyAppView>(); },
+    false                       // hardware_limited: true only for PortaPack-only apps
+}};
+}
+```
+
+Pick the `Category` from the app's upstream `app_location_t`. Pick the closest icon
+in `bitmaps.hpp`; if none fits, pass `nullptr` (you get a generic tile) — do not
+invent a new bitmap unless the app clearly needs one.
+
+The registry only works because the app sources are an OBJECT library, so your
+file-scope Registrar always runs. Do not add your app to any list by hand.
+
+## Do NOT create shared/common files
+
+You are one of many agents running at once. Create ONLY your own app's files
+(`ui_<app>.hpp` / `.cpp`, and a `test_<app>.cpp`). If you need a helper that does
+not exist in Phase A, implement it inside your own files, not a new shared header —
+another agent may be creating a file by the same name at the same time. The one
+exception is your Registrar, which lives in your own `.cpp`.
+
 ## Conventions that are not negotiable
 
 1. **One app per `.hpp`/`.cpp` pair** in `src/apps/`, named after the upstream

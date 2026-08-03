@@ -240,3 +240,12 @@ bool AnalogAudioView::on_encoder(const ui::EncoderEvent delta) {
 }
 
 }  // namespace app
+
+#include "app_registry.hpp"
+#include "bitmaps.hpp"
+
+namespace {
+const app::Registrar reg_audio{{"audio", "Audio", app::Category::Receive,
+                                ui::Color::green(), &ui::bitmap_icon_speaker,
+                                [] { return std::make_unique<app::AnalogAudioView>(); }}};
+}  // namespace

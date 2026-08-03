@@ -86,7 +86,12 @@ file(GLOB MB200_RADIO_SOURCES CONFIGURE_DEPENDS src/radio/*.cpp)
 file(GLOB MB200_AUDIO_SOURCES CONFIGURE_DEPENDS src/audio/*.cpp)
 file(GLOB MB200_APPS_SOURCES  CONFIGURE_DEPENDS src/apps/*.cpp)
 
-add_library(mb200 STATIC
+# OBJECT, not STATIC: apps self-register through a file-scope Registrar and are
+# reached only through the registry, never named directly. A static library's
+# linker would discard those objects as unreferenced and the apps would silently
+# disappear from the menu. An object library forces every object into the final
+# link, so the registrars always run. (See src/apps/app_registry.hpp.)
+add_library(mb200 OBJECT
     ${MB200_UI_SOURCES}
     ${MB200_CORE_SOURCES}
     ${MB200_DSP_SOURCES}

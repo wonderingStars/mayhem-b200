@@ -120,23 +120,41 @@ has focus. Select on the frequency field cycles the step size
 
 ## Apps
 
-| App | State |
-|---|---|
-| **Receive audio** | AM (DSB 9k/6k, USB, LSB, CW), NFM (8k5/11k/16k), WFM (200k/180k), spectrum-only. Squelch, volume, hardware AGC, audio AGC, de-emphasis, waterfall, tune-by-tap. |
-| **Spectrum** | Live wide span up to the device's maximum rate, trace + waterfall, peak hold, tune-by-tap. |
-| **Capture IQ** | `.C16` interleaved int16 IQ plus a Mayhem-format `.TXT` sidecar. Runs alongside audio. |
-| **Radio setup** | Sample rate, antenna port, LO offset, DC-offset and IQ-balance correction, device capabilities, overflow/drop counters. |
-| **About** | Version, controls, credits. |
+The full PortaPack Mayhem app suite is ported — **~103 apps** across the same
+category menus Mayhem uses, all reachable from the icon-grid home screen:
+
+- **Receive (33):** Audio (AM/NFM/WFM/SSB/CW), ADS-B, AIS, APRS, POCSAG, FLEX,
+  Radiosonde, Weather/TPMS, ERT, ACARS, AFSK, RTTY, SSTV, Morse, NOAA APT, WeFax,
+  VOR, Scanner, Signal Hunter, Detector, Level, Time Sink, FM Radio, Tetra,
+  SubCar, 2-Tone, NRF, EPIRB, FPV Detect, Analog TV, gfxEQ, Fox hunt.
+- **Transmit (26):** Mic, OOK/Encoders + OOK Editor/Brute, RDS, APRS, RTTY, Morse,
+  POCSAG, FLEX, SSTV, Signal gen, 2-Tone pager, Soundboard, GPS Sim, VOR, ADS-B,
+  EPIRB, Jammer, KeeLoq, Keyfob, Security+, BHT, BurgerPgr, BLE, cart lock.
+- **Transceiver (2):** Mic TX, KISS TNC.
+- **Utilities (17):** Capture IQ, Replay/Playlist, Playlist Editor, File Manager,
+  Freq Manager, Notepad, IQ Trim, Calculator, Antenna Length, Metronome, Stopwatch,
+  Tuner, Random Password, WAV Viewer, Waterfall Designer, Wardrive Map.
+- **Games (10):** Snake, Tetris, 2048, Breakout, Space Invaders, Blackjack,
+  Battleship, Dino, Morse Practice, DOOM (shell).
+- **Settings / Debug:** Radio Setup, Settings, About, Hard Reset, Audio Test,
+  Font Viewer, Debug PMem, plus honest **"N/A on B200"** screens for the
+  PortaPack-only apps (MCU Temperature, Ext Sensors, SD-over-USB, Wipe SD card,
+  App Manager) that explain why the hardware does not apply.
+
+Every app with decode/encode logic is tested against known protocol data (CRC
+vectors, round-trips through the modulators, documented frames). TX apps that
+radiate illegal signals (jammer, GPS sim, ADS-B/EPIRB TX, spam family) carry an
+on-screen legality warning and never transmit without an explicit action.
 
 Recordings and frequency lists go under
 `Documents\mayhem-b200\CAPTURES` and `...\FREQMAN`.
 
-### Not implemented yet
+### Depth caveats
 
-Transmit (the UHD TX path and audio capture exist and are tested, but no TX app
-is wired up), the protocol decoders (ADS-B, AIS, POCSAG, TPMS, ERT, BLE...),
-Recon/scanner, the frequency manager UI, replay from file, and the Looking Glass
-sweep. The receive chain and widget set they would build on are in place.
+DOOM is a shell that reports whether a WAD is present, not a playable port.
+Analog TV and some wideband 2.4/5.8 GHz apps (BLE, NRF, FPV) sit at the edge of
+the B200's range and their pipelines are ported and unit-tested but, like
+everything here, unproven on real RF (see Status).
 
 ## How it fits together
 
@@ -168,7 +186,7 @@ their bandwidths deliberately match Mayhem's labels.
 
 ## Tests
 
-86 tests, no framework dependency:
+**1986 tests, no framework dependency:**
 
 ```bash
 build\tests\mb200_tests.exe

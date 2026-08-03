@@ -54,3 +54,12 @@ void AboutView::on_show() {
 }
 
 }  // namespace app
+
+#include "app_registry.hpp"
+#include "bitmaps.hpp"
+
+namespace {
+const app::Registrar reg_about{{"about", "About", app::Category::Settings,
+                                ui::Color::light_grey(), &ui::bitmap_icon_setup,
+                                [] { return std::make_unique<app::AboutView>(); }}};
+}  // namespace

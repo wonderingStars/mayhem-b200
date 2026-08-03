@@ -424,6 +424,15 @@ void BtnGridView::on_blur() {
 void BtnGridView::on_show() {
     View::on_show();
     reload_items();
+
+    /* Give a tile initial keyboard focus. Upstream relied on the firmware's
+     * event dispatcher bubbling the first key up to the grid; this project's
+     * dispatcher routes only to the focused widget, so without this the grid
+     * would ignore the keyboard until the pointer touched a tile. */
+    if (item_count() > 0) {
+        const size_t visible = highlighted_index() - offset_index();
+        if (auto* v = item_view(visible)) v->focus();
+    }
 }
 
 void BtnGridView::on_hide() {

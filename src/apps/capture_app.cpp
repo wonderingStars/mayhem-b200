@@ -139,3 +139,12 @@ void CaptureView::on_frame_sync() {
 }
 
 }  // namespace app
+
+#include "app_registry.hpp"
+#include "bitmaps.hpp"
+
+namespace {
+const app::Registrar reg_capture{{"capture", "Capture", app::Category::Home,
+                                  ui::Color::red(), &ui::bitmap_icon_capture,
+                                  [] { return std::make_unique<app::CaptureView>(); }}};
+}  // namespace

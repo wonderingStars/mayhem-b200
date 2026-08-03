@@ -1,5 +1,10 @@
 /*
- * mayhem-b200 — main menu.
+ * mayhem-b200 — home and category menus.
+ *
+ * Mayhem's home screen is an icon grid, not a list. The top level shows the
+ * category tiles (Receive, Transmit, Transceiver, Utilities, Games, Settings)
+ * plus any app registered directly under Home, and each category is its own
+ * icon-grid sub-page populated from the app registry.
  *
  * Copyright (C) 2026 mayhem-b200 contributors
  * SPDX-License-Identifier: GPL-2.0-or-later
@@ -8,26 +13,40 @@
 #ifndef __MB200_MAIN_MENU_H__
 #define __MB200_MAIN_MENU_H__
 
+#include "app_registry.hpp"
 #include "ui.hpp"
-#include "ui_menu.hpp"
-#include "ui_widget.hpp"
+#include "ui_btngrid.hpp"
 
 #include <string>
 
 namespace app {
 
-class MainMenuView : public ui::View {
+/* A grid page filled from one registry category. Pushing an app is deferred to
+ * the navigation layer, so selecting a tile is safe even though it may destroy
+ * this menu. */
+class CategoryMenuView : public ui::BtnGridView {
+   public:
+    explicit CategoryMenuView(Category category);
+
+    std::string title() const override { return title_; }
+
+   protected:
+    void on_populate() override;
+
+   private:
+    Category category_;
+    std::string title_;
+};
+
+/* The home grid: category tiles first, then Home-category apps. */
+class MainMenuView : public ui::BtnGridView {
    public:
     MainMenuView();
 
     std::string title() const override { return "Mayhem B200"; }
 
-    void on_show() override;
-
-   private:
-    ui::MenuView menu_{{0, 8, 240, 240}, true};
-    ui::Text text_hint_{{0, 264, 240, 16}, ""};
-    ui::Text text_device_{{0, 282, 240, 16}, ""};
+   protected:
+    void on_populate() override;
 };
 
 }  // namespace app

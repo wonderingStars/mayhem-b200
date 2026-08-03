@@ -111,3 +111,12 @@ void SpectrumAnalysisView::on_frame_sync() {
 }
 
 }  // namespace app
+
+#include "app_registry.hpp"
+#include "bitmaps.hpp"
+
+namespace {
+const app::Registrar reg_spectrum{{"lookingglass", "Looking Glass", app::Category::Home,
+                                   ui::Color::green(), &ui::bitmap_icon_looking,
+                                   [] { return std::make_unique<app::SpectrumAnalysisView>(); }}};
+}  // namespace

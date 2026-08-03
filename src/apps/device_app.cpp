@@ -171,3 +171,12 @@ void DeviceView::refresh_info() {
 }
 
 }  // namespace app
+
+#include "app_registry.hpp"
+#include "bitmaps.hpp"
+
+namespace {
+const app::Registrar reg_device{{"radio", "Radio Setup", app::Category::Settings,
+                                 ui::Color::cyan(), &ui::bitmap_icon_peripherals_details,
+                                 [] { return std::make_unique<app::DeviceView>(); }}};
+}  // namespace

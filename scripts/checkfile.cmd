@@ -38,7 +38,7 @@ cl /nologo /c /std:c++20 /EHsc /permissive- /Zc:__cplusplus /utf-8 /W4 ^
    /I src /I src\ui /I src\core /I src\dsp /I src\radio /I src\audio /I src\apps /I tests ^
    /external:I "C:\Program Files\UHD\include" ^
    /external:I "C:\vcpkg\installed\x64-windows\include" /external:W0 ^
-   /Fo"%MB200_OBJ%" ^
+   /Fo"%MB200_OBJ%\" ^
    @"%MB200_RSP%"
 
 set "MB200_RC=%ERRORLEVEL%"
