@@ -4,7 +4,13 @@ PortaPack Mayhem's interface and its whole app suite, running on your PC against
 an **Ettus USRP B200** — with more bandwidth, better filters and a real CPU
 behind it.
 
-![status](https://img.shields.io/badge/status-alpha-orange) ![apps](https://img.shields.io/badge/apps-~103-green) ![tests](https://img.shields.io/badge/tests-1986%20passing-brightgreen) ![licence](https://img.shields.io/badge/licence-GPL--2.0--or--later-blue)
+![status](https://img.shields.io/badge/status-alpha-orange) ![hardware](https://img.shields.io/badge/tested%20on-Ettus%20USRP%20B200-brightgreen) ![apps](https://img.shields.io/badge/apps-~103-green) ![tests](https://img.shields.io/badge/tests-1990%20passing-brightgreen) ![licence](https://img.shields.io/badge/licence-GPL--2.0--or--later-blue)
+
+> **Tested on real hardware.** Run against a physical **Ettus USRP B200**
+> (serial EDR04ZDB2, 2026-08-03): all 67 radio apps run on the device, the
+> backend self-test passes across 100 MHz – 2.44 GHz with zero dropped samples,
+> and the ADS-B app decoded real aircraft off the air. Details in
+> [Status and caveats](#status-and-caveats).
 
 > **This project is looking for people.** It works, it decoded real aircraft off
 > the air, and it is one person's work so far. If you want a portable version of
