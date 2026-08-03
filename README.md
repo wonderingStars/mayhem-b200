@@ -1,9 +1,17 @@
 # Mayhem B200
 
-PortaPack Mayhem's interface and apps, running on your PC against an
-**Ettus USRP B200**.
+PortaPack Mayhem's interface and its whole app suite, running on your PC against
+an **Ettus USRP B200** — with more bandwidth, better filters and a real CPU
+behind it.
 
-![status](https://img.shields.io/badge/status-alpha-orange) ![licence](https://img.shields.io/badge/licence-GPL--2.0--or--later-blue)
+![status](https://img.shields.io/badge/status-alpha-orange) ![apps](https://img.shields.io/badge/apps-~103-green) ![tests](https://img.shields.io/badge/tests-1986%20passing-brightgreen) ![licence](https://img.shields.io/badge/licence-GPL--2.0--or--later-blue)
+
+> **This project is looking for people.** It works, it decoded real aircraft off
+> the air, and it is one person's work so far. If you want a portable version of
+> this to exist, or you design PCBs, or you just want to try it — see
+> [Where this goes next](#where-this-goes-next) and
+> [How you can help](#how-you-can-help). Telling me you want it is genuinely
+> useful; a star on this repo is the cheapest way to do that.
 
 ---
 
@@ -42,7 +50,77 @@ focus manager, theme, the spectrum palette — are used unchanged. See
 
 ### What you lose
 
-It is not pocket-sized and it needs a host. That was always the trade.
+It is not pocket-sized and it needs a host. That is what the next section is
+about.
+
+---
+
+## Where this goes next
+
+The obvious question is whether this can become a handheld again. It can, but
+not the way a PortaPack does, and it is worth being precise about why.
+
+A PortaPack works because the HackRF already contains the computer. The
+PortaPack is a screen, a control wheel and an audio codec on a header, and the
+HackRF's own MCU runs Mayhem. **A B200 mini has no such processor** — it is a
+USB device and it needs a USB host. So a portable build is not a PortaPack; it
+is a small computer, a B200 mini and a battery in one enclosure, running this
+software.
+
+That makes the concept roughly:
+
+| Part | Why |
+|---|---|
+| SBC with real USB 3 | The B200's high sample rates need it; USB 2 caps you near 16 Msps |
+| B200 mini (or clone) | The radio |
+| 240x320-and-up display | The UI is drawn at PortaPack resolution and scales cleanly |
+| Five-way + encoder + audio | So the existing input mapping just works |
+| Battery and power path | Radio plus host is watts, not milliwatts — this is the hard part |
+| Carrier PCB | Ties the above together instead of a nest of adapters |
+
+**Two things have to happen before the PCB is the interesting problem:**
+
+1. **A Linux port.** Today the display is Win32/GDI and the audio is WinMM. The
+   platform-specific code is contained to three files — `src/ui/window.cpp`,
+   `src/audio/audio_out.cpp` and `src/audio/audio_in.cpp` — out of ~108k lines,
+   because everything above them is Mayhem's own portable UI core. This is a
+   contained job, not a rewrite, but nothing runs on an SBC until it is done.
+2. **Evidence that people want it.** A carrier board costs money and somebody's
+   evenings. Before that, the same machine can be built from off-the-shelf
+   parts and adapters — ugly, but it proves the idea and it costs the project
+   nothing. If a handful of people build one, the PCB is worth designing.
+
+That is the honest order of operations. I would rather say so than take money
+for a board nobody has run the software on.
+
+---
+
+## How you can help
+
+**I am one person and this needs more than one.** In rough order of how much it
+would unblock:
+
+- **Try it and say something.** Open an
+  [issue](https://github.com/wonderingStars/mayhem-b200/issues) — "this worked",
+  "this decoded nothing", "I would buy the portable one" are all useful. Star
+  the repo if you want it to continue; that number is the only signal I have.
+- **A Linux port** of the three platform files above (SDL2 or DRM/KMS +
+  ALSA/PipeWire). This is the single highest-leverage contribution and it
+  unlocks everything portable.
+- **A PCB designer.** If the handheld gets past the proof stage I need someone
+  who has done power paths and USB 3 layout properly. Talk to me before it is
+  urgent — the enclosure and the board argue with each other early.
+- **RF testing.** Almost every decoder here is unit-tested but has never met a
+  real signal (see [Status](#status-and-caveats)). If you have a POCSAG pager,
+  an AIS receiver's view of a harbour, a weather sonde overhead — running one
+  app and reporting what happened is real work I cannot do alone.
+- **Transmit verification**, if you are licensed and have a dummy load. Nothing
+  in the TX chain has ever radiated.
+
+**Funding.** There is no donation link yet and I am not going to put one up to
+collect money for a product that does not exist. If the interest is there it
+will go here, and it will be for parts and prototype boards, itemised. If you
+want to fund something specific in the meantime, say so in an issue.
 
 ---
 
@@ -100,7 +178,8 @@ build\mayhem-b200.exe
 
 The app starts and stays usable with no radio attached — it shows `no dev` in
 the status bar, and **Radio setup → Reconnect** picks the device up when you
-plug it in.
+plug it in. **You do not need a B200 to look around**, which is the easiest way
+to decide whether you care about this project.
 
 ### Controls
 
@@ -201,18 +280,39 @@ in the radio layer.
 
 ## Status and caveats
 
-**This has not been run against a physical B200.** No USRP was attached to the
-machine it was developed on, so the UHD calls, streaming threads, tuning, gain
-control and IQ capture are verified by construction and by their no-device
-paths, not by observed RF. Expect the hardware bring-up to need a pass. The UI,
-DSP and file handling are exercised directly by the tests and by running the
-application.
+**The receive path is verified on a physical USRP B200** (serial EDR04ZDB2,
+2026-08-03). A hardware self-test (`tools/hw_selftest.cpp`, build target
+`mb200_hwtest`) opens the device, reads its capabilities (42 MHz – 6.008 GHz,
+0–76 dB, up to 16 Msps on USB 2), sweeps gain (−69 → −15 dBFS across 0–60 dB),
+tunes and streams at eight frequencies from 100 MHz to 2.44 GHz, and sustains
+2.40 Msps for 2 s with **zero overflows, drops or errors** — all checks pass.
+The GUI has been driven live: the spectrum shows the real FM broadcast band, and
+the **ADS-B app decoded real aircraft** off the air (17 CRC-valid Mode S frames,
+2 aircraft, real ICAO/callsign/speed), which exercises the full
+tune → stream → demod → CRC → parse chain on live RF.
+
+What is **still unverified on hardware:**
+- **Transmit.** Nothing has been transmitted. The TX chain and encoders are
+  unit-tested only.
+- **Most individual decoders** beyond ADS-B — their logic is unit-tested against
+  known data, but a live decode depends on a signal being present locally.
+- **USB 3 rates.** The test device was on a USB 2 port (16 Msps ceiling); wide
+  spans and high sample rates are untested.
+- Audio demodulation was confirmed to *stream and measure* correctly but not
+  verified by ear.
+
+The UI, DSP and file handling are exercised directly by the unit tests (1986,
+all passing) and by running the application.
 
 ## Licence
 
 GPL-2.0-or-later, inherited from PortaPack Mayhem. See [NOTICE.md](NOTICE.md)
 for attribution and [LICENSE.GPL-2.0-or-later](LICENSE.GPL-2.0-or-later) for
 terms. No warranty.
+
+This is an independent project. It is not affiliated with or endorsed by the
+PortaPack Mayhem project, or with Ettus Research / NI. Any hardware that comes
+out of it ships under the same licence, source included.
 
 You are responsible for what you transmit. Most of the B200's tuning range is
 licensed to somebody.

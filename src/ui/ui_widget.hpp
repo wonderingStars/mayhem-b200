@@ -63,7 +63,7 @@ class Widget {
     Widget& operator=(const Widget&) = delete;
     Widget& operator=(Widget&&) = delete;
 
-    virtual ~Widget() = default;
+    virtual ~Widget();
 
     Point screen_pos() const;
     Size size() const;

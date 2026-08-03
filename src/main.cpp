@@ -10,9 +10,11 @@
 #include "apps/event_dispatch.hpp"
 #include "apps/main_menu.hpp"
 #include "apps/ui_navigation.hpp"
+#include "audio/audio_in.hpp"
 #include "audio/audio_out.hpp"
 #include "core/file_path.hpp"
 #include "radio/receiver_model.hpp"
+#include "radio/transmitter_model.hpp"
 #include "radio/usrp_radio.hpp"
 #include "ui/display.hpp"
 #include "ui/theme.hpp"
@@ -147,12 +149,19 @@ int main(int argc, char** argv) {
     receiver.set_volume(40);
     if (radio_ok) receiver.set_gain(40);
 
+    /* The transmit chain and mic capture the TX / Mic apps need. Constructed but
+     * idle — nothing transmits or captures until an app explicitly starts it. */
+    radio::TransmitterModel transmitter{radio};
+    audio::AudioIn audio_in;
+
     SystemView system_view;
 
     auto& ctx = app::globals();
     ctx.radio = &radio;
     ctx.receiver = &receiver;
+    ctx.transmitter = &transmitter;
     ctx.audio_out = &audio_out;
+    ctx.audio_in = &audio_in;
     ctx.nav = &system_view.navigation();
 
     system_view.navigation().push_new<app::MainMenuView>();
@@ -205,6 +214,8 @@ int main(int argc, char** argv) {
     }
 
     receiver.stop();
+    transmitter.stop();
+    audio_in.stop();
     radio.close();
     audio_out.stop();
     window.destroy();

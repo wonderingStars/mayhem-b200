@@ -135,6 +135,28 @@ if(WIN32)
 endif()
 
 # ---------------------------------------------------------------------------
+# Hardware self-test (needs a real USRP; built on demand)
+# ---------------------------------------------------------------------------
+
+add_executable(mb200_hwtest EXCLUDE_FROM_ALL tools/hw_selftest.cpp)
+target_link_libraries(mb200_hwtest PRIVATE mb200)
+
+add_executable(mb200_appsmoke EXCLUDE_FROM_ALL tools/app_smoketest.cpp)
+target_link_libraries(mb200_appsmoke PRIVATE mb200)
+
+if(WIN32)
+    find_file(UHD_DLL_HW uhd.dll HINTS "${UHD_ROOT}/bin")
+    if(UHD_DLL_HW)
+        add_custom_command(TARGET mb200_hwtest POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    "${UHD_DLL_HW}" "$<TARGET_FILE_DIR:mb200_hwtest>")
+        add_custom_command(TARGET mb200_appsmoke POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    "${UHD_DLL_HW}" "$<TARGET_FILE_DIR:mb200_appsmoke>")
+    endif()
+endif()
+
+# ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
 

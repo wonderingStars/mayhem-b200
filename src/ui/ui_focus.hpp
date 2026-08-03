@@ -39,6 +39,12 @@ class FocusManager {
     void setMirror(Widget* const mirror_widget);
     void clearMirror();
 
+    /* Drops `w` if it is currently the focus or mirror widget. The Widget
+     * destructor calls this so a destroyed widget can never be left dangling in
+     * the manager — otherwise the next set_focus_widget() would call on_blur()
+     * on freed memory (a use-after-free seen when leaving one app for another). */
+    void notify_widget_destroyed(const Widget* const w);
+
    private:
     Widget* focus_widget_{nullptr};
     Widget* mirror_widget_{nullptr};

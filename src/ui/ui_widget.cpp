@@ -39,6 +39,14 @@ const std::vector<Widget*> Widget::no_children{};
 
 /* --- Widget ---------------------------------------------------------------- */
 
+Widget::~Widget() {
+    /* A destroyed widget must not be left dangling in the focus manager: the
+     * next set_focus_widget() blurs the previous focus widget, and if that
+     * memory has been freed (as when the user leaves one app for another) it is
+     * a use-after-free. Clearing it here makes teardown order irrelevant. */
+    context().focus_manager().notify_widget_destroyed(this);
+}
+
 Point Widget::screen_pos() const {
     return parent() ? (parent()->screen_pos() + parent_rect().location())
                     : parent_rect().location();

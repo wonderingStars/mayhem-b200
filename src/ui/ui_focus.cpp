@@ -46,6 +46,11 @@ void FocusManager::clearMirror() {
     mirror_widget_ = nullptr;
 }
 
+void FocusManager::notify_widget_destroyed(const Widget* const w) {
+    if (focus_widget_ == w) focus_widget_ = nullptr;
+    if (mirror_widget_ == w) mirror_widget_ = nullptr;
+}
+
 void FocusManager::set_focus_widget(Widget* const new_focus_widget) {
     // Widget already has focus.
     if (new_focus_widget == focus_widget()) {
