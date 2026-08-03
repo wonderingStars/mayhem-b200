@@ -21,6 +21,20 @@ behind it.
 
 ---
 
+## Screenshots
+
+All captured from the running application with the **Ettus USRP B200 connected**
+(the green `B200` in the status bar). Mayhem's own fonts, palette and 240×320
+layout, drawn to a host framebuffer.
+
+| ![Icon-grid home](docs/screenshots/home.png) | ![Receive apps](docs/screenshots/receive-menu.png) | ![Transmit apps](docs/screenshots/transmit-menu.png) |
+|:---:|:---:|:---:|
+| **Home** — the icon-grid menu | **Receive** — 33 RX apps (one of several pages) | **Transmit** — 26 TX apps |
+| ![Live FM spectrum](docs/screenshots/spectrum-fm.png) | ![ADS-B decoding real aircraft](docs/screenshots/adsb-aircraft.png) | ![FM broadcast receiver](docs/screenshots/fm-radio.png) |
+| **Spectrum** — live FM band off the B200 | **ADS-B** — real aircraft decoded off the air (17 valid frames) | **FM Radio** — WFM broadcast receiver |
+
+---
+
 ## What this actually is
 
 Mayhem is firmware. It runs on the PortaPack's LPC43xx — a dual-core Cortex-M
