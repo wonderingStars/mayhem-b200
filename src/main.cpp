@@ -24,9 +24,14 @@
 
 #include <chrono>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <string>
 #include <thread>
+
+#if defined(_WIN32)
+#include <windows.h>  /* GetModuleFileNameW for the bundled-images lookup */
+#endif
 
 namespace {
 
@@ -97,9 +102,38 @@ void print_help() {
         app::kVersion);
 }
 
+#if defined(_WIN32)
+/* In a downloaded release the UHD firmware/FPGA images ship in an `uhd-images`
+ * folder next to the exe. UHD looks them up via UHD_IMAGES_DIR, so if the user
+ * has not set it and that bundled folder exists, point UHD at it. This is what
+ * lets the packaged build initialise a B200 without a separate UHD install. */
+void use_bundled_uhd_images() {
+    if (const char* existing = std::getenv("UHD_IMAGES_DIR");
+        existing != nullptr && existing[0] != '\0')
+        return;  /* respect an explicit user setting */
+
+    wchar_t exe[MAX_PATH];
+    const DWORD n = GetModuleFileNameW(nullptr, exe, MAX_PATH);
+    if (n == 0 || n >= MAX_PATH) return;
+
+    std::wstring path{exe, n};
+    const auto slash = path.find_last_of(L"\\/");
+    if (slash == std::wstring::npos) return;
+    path.resize(slash);
+    path += L"\\uhd-images";
+
+    if (GetFileAttributesW(path.c_str()) == INVALID_FILE_ATTRIBUTES) return;
+    _wputenv_s(L"UHD_IMAGES_DIR", path.c_str());
+}
+#else
+void use_bundled_uhd_images() {}
+#endif
+
 }  // namespace
 
 int main(int argc, char** argv) {
+    use_bundled_uhd_images();
+
     const Options options = parse_args(argc, argv);
 
     if (options.help) {

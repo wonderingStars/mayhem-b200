@@ -9,3 +9,6 @@ out/
 *.obj
 *.lib
 CMakeUserPresets.json
+
+# release staging + zips (published as GitHub release assets, not committed)
+dist/

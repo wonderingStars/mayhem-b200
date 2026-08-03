@@ -35,6 +35,24 @@ layout, drawn to a host framebuffer.
 
 ---
 
+## Download (Windows)
+
+**[Download the latest Windows build →](https://github.com/wonderingStars/mayhem-b200/releases/latest)**
+
+Grab the `mayhem-b200-<version>-win64.zip`, unzip it anywhere, and run
+`mayhem-b200.exe`. It is self-contained — the UHD and Visual C++ runtime DLLs
+and the B200/B210 firmware/FPGA images are bundled, so **no separate UHD, Boost
+or Visual Studio install is needed.**
+
+There is **one** manual step, once per PC: bind the **WinUSB** driver to the
+B200 with [Zadig](https://zadig.akeo.ie) (every USRP needs this on Windows).
+Full instructions are in `READ-ME-FIRST.txt` inside the zip. After that, plug in
+the B200 and the status bar shows a green **B200**.
+
+Prefer to build it yourself? See [Building](#building).
+
+---
+
 ## What this actually is
 
 Mayhem is firmware. It runs on the PortaPack's LPC43xx — a dual-core Cortex-M

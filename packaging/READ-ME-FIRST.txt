@@ -1,0 +1,60 @@
+Mayhem B200 — Windows build
+===========================
+
+PortaPack Mayhem's UI and app suite for the Ettus USRP B200, as a Windows app.
+
+WHAT'S IN THIS FOLDER
+  mayhem-b200.exe     the application (double-click to run)
+  uhd.dll, libusb-1.0.dll, *140*.dll   runtime libraries (keep next to the exe)
+  uhd-images\         the B200/B210 firmware + FPGA images the radio needs
+  LICENSE, NOTICE.md  licensing (GPL-2.0-or-later)
+
+You do NOT need to install UHD, Boost, or Visual Studio to run this. Everything
+required is in this folder.
+
+
+FIRST RUN — ONE-TIME DRIVER STEP (required)
+-------------------------------------------
+Windows needs a "WinUSB" driver bound to the B200 before any SDR software
+(including this one) can open it. This is a standard, one-time step for every
+USRP on Windows and it is the only thing you have to do by hand.
+
+  1. Plug in the USRP B200 (a USB 3 port is best; USB 2 works but is slower).
+  2. Download Zadig from https://zadig.akeo.ie  (a tiny, well-known tool).
+  3. Run Zadig -> Options -> "List All Devices".
+  4. In the dropdown pick the USRP B200 (it may show as "USRP B200" or
+     "Unknown Device #..."). Confirm the USB ID is VID 2500, PID 0020.
+  5. Set the driver to "WinUSB" and click "Install Driver" / "Replace Driver".
+  6. Done. You only ever do this once per PC.
+
+If you have used SDR software with this B200 on this PC before, the driver is
+probably already installed and you can skip the above.
+
+
+RUNNING
+-------
+Double-click mayhem-b200.exe.
+
+  - The status bar top-right shows the device: green "B200" when connected,
+    red "no dev" when not. If it says "no dev", open "Settings -> Radio Setup"
+    and press "Reconnect" after the driver step above.
+  - Controls: arrow keys navigate and tune, Enter selects, Esc goes back,
+    the mouse wheel is the encoder, the mouse is the touch screen, F11 changes
+    the window size.
+
+Command-line options (optional):
+  mayhem-b200.exe --list                 list attached USRP devices and exit
+  mayhem-b200.exe --scale=3              bigger window (1..6)
+  mayhem-b200.exe --args=serial=XXXXXXX  pick a specific device
+
+
+HONEST STATUS
+-------------
+The RECEIVE side is verified on a real B200: the spectrum, FM, and the ADS-B
+decoder all work on live signals. TRANSMIT has NOT been verified on hardware and
+transmitting on most frequencies requires a licence — you are responsible for
+what you radiate. Some apps show an on-screen note where a feature needs
+hardware a B200 host does not have.
+
+Source, issues and updates:  https://github.com/wonderingStars/mayhem-b200
+Licence: GPL-2.0-or-later. No warranty.
