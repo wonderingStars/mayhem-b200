@@ -62,7 +62,7 @@ constexpr size_t kSpectrumSamples = 4096;
 
 }  // namespace
 
-ReceiverModel::ReceiverModel(UsrpRadio& radio, audio::AudioOut& audio_out)
+ReceiverModel::ReceiverModel(RadioDevice& radio, audio::AudioOut& audio_out)
     : radio_{radio},
       audio_{audio_out} {
     spectrum_buffer_.resize(kSpectrumSamples);

@@ -1,0 +1,110 @@
+<!-- SPDX-License-Identifier: GPL-2.0-or-later -->
+<!-- Part of mayhem-b200. -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mayhem-b200 portal</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="app.css">
+<!-- panels/*.js's own look (--mp-* prefixed vars, .mp-* classes -- never
+     collides with app.css); see panels/registry.js and ../../PANELS.md. -->
+<link rel="stylesheet" href="panels/panels.css">
+</head>
+<body>
+<div id="app">
+
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-mark">mayhem<span class="accent">b200</span></span>
+      <span class="brand-sub">app portal</span>
+    </div>
+    <div class="status-cluster" id="statusCluster">
+      <span class="status-item" id="stDevice">
+        <span class="dot off" id="stConnDot"></span>
+        <span id="stDeviceText">connecting&hellip;</span>
+      </span>
+      <span class="status-item mono" id="stRx">
+        <span class="rxtx-chip" id="stRxChip">RX</span>
+      </span>
+      <span class="status-item mono" id="stTx">
+        <span class="rxtx-chip" id="stTxChip">TX</span>
+      </span>
+      <span class="status-item version" id="stVersion"></span>
+    </div>
+  </header>
+
+  <div id="backendError" class="backend-error hidden" role="alert">
+    <div class="backend-error-inner">
+      <div class="backend-error-title">mayhem-b200 is not running</div>
+      <div class="backend-error-body">
+        This portal can't reach it right now. Start mayhem-b200 and this
+        page will reconnect automatically — no need to refresh.
+      </div>
+      <button class="btn" id="retryBtn" type="button">Retry now</button>
+    </div>
+  </div>
+
+  <main id="mainArea">
+
+    <!-- ---------- app grid ---------- -->
+    <section id="gridView">
+      <div class="grid-toolbar">
+        <div class="search-wrap">
+          <svg class="search-icon" viewBox="0 0 20 20" aria-hidden="true">
+            <circle cx="9" cy="9" r="6.25" fill="none" stroke="currentColor" stroke-width="1.6"/>
+            <line x1="13.6" y1="13.6" x2="18" y2="18" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+          </svg>
+          <input type="search" id="searchInput" placeholder="Search apps&hellip;" autocomplete="off" spellcheck="false">
+        </div>
+        <div class="chip-row" id="categoryChips" role="tablist" aria-label="Filter by category"></div>
+      </div>
+
+      <div id="categorySections"></div>
+
+      <div id="gridEmpty" class="empty-state hidden">
+        <div class="empty-state-title">No apps match</div>
+        <div class="empty-state-body">Try a different search term or clear the category filter.</div>
+      </div>
+    </section>
+
+    <!-- ---------- app panel ---------- -->
+    <section id="panelView" class="hidden">
+      <div class="panel-topbar">
+        <button class="back-btn" id="backBtn" type="button" aria-label="Back to app grid">
+          <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M12.5 4.5 7 10l5.5 5.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          <span>All apps</span>
+        </button>
+        <div class="panel-title-block">
+          <div class="panel-app-title" id="panelTitle">&nbsp;</div>
+          <div class="panel-app-kind" id="panelKindLabel"></div>
+        </div>
+        <span class="hw-badge hidden" id="panelHwBadge">HW LIMITED</span>
+      </div>
+
+      <div id="panelMount" class="panel-mount"></div>
+    </section>
+
+  </main>
+</div>
+
+<div id="toast" aria-live="polite"></div>
+
+<script src="app.js"></script>
+<!-- The richer panel renderers (table/spectrum/receiver/console/map/screen;
+     see ../../PANELS.md). registry.js must load before the per-kind files;
+     bridge.js must load last -- it wires MayhemPanels into app.js's own
+     MayhemPortal.registerPanel(), overriding app.js's minimal built-in
+     "table" with this richer one and adding the kinds app.js doesn't have. -->
+<script src="panels/registry.js"></script>
+<script src="panels/table.js"></script>
+<script src="panels/spectrum.js"></script>
+<script src="panels/receiver.js"></script>
+<script src="panels/console.js"></script>
+<script src="panels/map.js"></script>
+<script src="panels/adsb.js"></script>
+<script src="panels/screen.js"></script>
+<script src="panels/bridge.js"></script>
+</body>
+</html>

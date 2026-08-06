@@ -1,0 +1,36 @@
+{
+  "app_name": "POCSAG",
+  "max_lines": 500,
+  "lines": [
+    {
+      "seq": 1,
+      "ts_ms": 1754300000000,
+      "text": "ready POCSAG512 decoder started"
+    },
+    {
+      "seq": 2,
+      "ts_ms": 1754300004000,
+      "text": "\u001b\u000ePOCSAG512\u001b\u0010 addr=1001001 func=3 \u001b\u000bALPHA\u001b\u0010 Ambulance requested at Main St / 5th Ave"
+    },
+    {
+      "seq": 3,
+      "ts_ms": 1754300009000,
+      "text": "\u001b\ferror\u001b\u0010 BCH decode failed, dropped frame"
+    },
+    {
+      "seq": 4,
+      "ts_ms": 1754300015000,
+      "text": "POCSAG1200 addr=2200441 func=0 numeric 4102"
+    },
+    {
+      "seq": 5,
+      "ts_ms": 1754300021000,
+      "text": "\u001b\u000ePOCSAG512\u001b\u0010 addr=1001001 func=3 \u001b\u000bALPHA\u001b\u0010 Cancel previous, unit already on scene"
+    },
+    {
+      "seq": 6,
+      "ts_ms": 1754300026000,
+      "text": "\u001b\u0002ok\u001b\u0010 squelch closed"
+    }
+  ]
+}

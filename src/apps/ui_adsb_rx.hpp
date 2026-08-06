@@ -53,10 +53,17 @@
  *     and airlines.db off the PortaPack's SD card, which the host does not have.
  *     The details view says so on screen rather than showing blank fields.
  *
- * NOTHING HERE HAS SEEN AIR. No USRP was attached during development, so the
- * end-to-end path (1090 MHz -> B200 -> demodulator -> table) is unverified. The
- * decode chain itself is tested against documented Mode S frames and against
- * synthesised PPM waveforms in tests/test_adsb.cpp.
+ *  7. Amplitude scale. Upstream's `amp` counts squared int8 ADC samples, which
+ *     only reproduces its numbers if the front end is driven near full scale.
+ *     A B200 is not, so the scale is referred to the measured noise floor
+ *     instead — see the note on AdsbDemod's kNoiseFloorCounts.
+ *
+ * THIS APP HAS NOW SEEN AIR, unlike most of the port. Verified against live
+ * 1090 MHz traffic on a B200 (EDR04ZDB2, 40 dB gain, 2026-08-04): aircraft
+ * decoded and tracked correctly, noise floor -66 dBFS, per-frame amplitudes
+ * measured and used to set the scale above. The decode chain itself is also
+ * tested against documented Mode S frames and against synthesised PPM
+ * waveforms in tests/test_adsb.cpp.
  *
  * Copyright (C) 2015 Jared Boone, ShareBrained Technology, Inc.
  * Copyright (C) 2017 Furrtek
@@ -315,9 +322,54 @@ class AdsbDemod {
 
     using FrameHandler = std::function<void(const AdsbFrame& frame, float amp)>;
 
+    /* --- Amplitude scale ---
+     *
+     * Upstream's magnitudes are sums of squared int8 samples, so one sample at
+     * the converter's full scale is 127 counts and a frame's amp — the four
+     * preamble magnitudes summed — runs to 4 * 127^2 = 64516. The UI renders
+     * amp >> 9, which is that scale divided into 0..126.
+     *
+     * Mapping the host's +/-1.0 samples straight onto 127 reproduces those
+     * numbers only for a front end driven near full scale. The PortaPack's
+     * 8-bit ADC is; a B200 is not. Measured on live 1090 MHz traffic at 40 dB
+     * gain (B200 EDR04ZDB2, 2026-08-04): noise floor -66 dBFS, and a decoded
+     * frame's four preamble magnitudes summed to between 0.09 and 1.8 on that
+     * mapping — every one of which truncated to zero as soon as it reached the
+     * app's uint32 amplitude.
+     *
+     * So the scale is referred to the measured noise floor rather than to the
+     * converter's full scale: whatever the front-end gain, the noise floor is
+     * mapped to kNoiseFloorCounts and a frame's amp then reports its power
+     * above that floor in upstream's units. The displayed amp >> 9 works out
+     * at roughly twice the preamble's power SNR, so the 0..255 the UI has room
+     * for spans about 21 dB of signal above the noise. */
+
+    /* Sample amplitude that maps to one int8 full scale. */
+    static constexpr float kInt8FullScale = 127.0f;
+
+    /* Int8 counts the measured noise floor is mapped to. */
+    static constexpr float kNoiseFloorCounts = 16.0f;
+
     AdsbDemod() { reset(); }
 
+    /* Clears the decode state. Deliberately does NOT clear the noise-floor
+     * estimate: the app resets the demodulator once per sample block (the
+     * blocks are not adjacent in time), and a per-block reset would leave the
+     * scale permanently unmeasured. */
     void reset();
+
+    /* Input amplitude that maps to int8 full scale. Zero — the default —
+     * tracks the noise floor instead. Set 1.0f for upstream's literal mapping,
+     * which is what a front end driven to full scale wants. */
+    void set_reference_amplitude(float amplitude);
+    float reference_amplitude() const { return reference_amplitude_; }
+
+    /* RMS amplitude of the tracked noise floor; zero until the first estimate.
+     * Only the complex-sample path measures it. */
+    float noise_floor() const;
+
+    /* Int8 counts per unit of input amplitude currently in force. */
+    float input_scale() const;
 
     /* Rate of the samples handed to process(). Anything other than 2 Msps is
      * linearly resampled to 2 Msps on the magnitude stream, which is legitimate
@@ -327,12 +379,15 @@ class AdsbDemod {
     void set_input_rate(double hz);
     double input_rate() const { return input_rate_; }
 
-    /* Complex baseband. Magnitudes are computed in the same units the firmware
-     * works in (samples scaled to int8 full scale) so that the `amp` reported
-     * with each frame is on upstream's scale and displays identically. */
+    /* Complex baseband. Magnitudes are converted to the units the firmware
+     * works in — see the amplitude-scale note above — so that the `amp`
+     * reported with each frame is on upstream's scale and displays
+     * identically. This is the path that tracks the noise floor. */
     void process(const dsp::cfloat* samples, size_t count, const FrameHandler& on_frame);
 
-    /* Magnitude (|s|^2) samples already at 2 Msps. */
+    /* Magnitude (|s|^2) samples already at 2 Msps. No scaling is applied and
+     * no noise floor is measured: a caller handing over magnitudes owns their
+     * units, and the `amp` it gets back is in those same units. */
     void process_magnitudes(const float* mags, size_t count, const FrameHandler& on_frame);
 
     uint32_t preambles_detected() const { return preambles_; }
@@ -341,10 +396,17 @@ class AdsbDemod {
    private:
     void process_one(float mag, const FrameHandler& on_frame);
 
+    /* Folds one block's magnitudes into noise_floor_power_. */
+    void update_noise_floor(const float* mags, size_t count);
+
     double input_rate_{kNativeSampleRate};
     MagnitudeResampler resampler_{};
     std::vector<float> mag_raw_{};
     std::vector<float> mag_scratch_{};
+    std::vector<float> noise_scratch_{};
+
+    float reference_amplitude_{0.0f};  /* 0: track the noise floor */
+    float noise_floor_power_{0.0f};    /* mean |s|^2 of the noise, 0: none yet */
 
     AdsbFrame frame_{};
     bool decoding_{false};
@@ -391,7 +453,13 @@ struct AircraftRecentEntry {
 
     ADSBAgeState state{ADSBAgeState::Invalid};
     uint32_t age{0}; /* seconds since the last accepted frame */
-    uint32_t amp{0};
+
+    /* Smoothed frame amplitude on upstream's int8-magnitude scale (see
+     * AdsbDemod). Upstream keeps this in a uint32 because its baseband hands
+     * over an integer; here it stays a float, because a frame heard on a B200
+     * can be a fraction of a count and rounding it to an integer at this point
+     * reported every aircraft at zero. */
+    float amp{0.0f};
     adsb::adsb_pos pos{};
     adsb::adsb_vel velo{false, adsb::SPD_GND, 0, 999, 0};
     adsb::AdsbFrame frame_pos_even{};
@@ -407,6 +475,10 @@ struct AircraftRecentEntry {
     explicit AircraftRecentEntry(uint32_t address);
 
     Key key() const { return ICAO_address; }
+
+    /* The amplitude as the Amp column and the portal's Sig column show it:
+     * upstream's amp >> 9, saturating rather than wrapping. */
+    uint32_t amp_display() const;
 
     void set_callsign(std::string new_callsign) { callsign = std::move(new_callsign); }
     void inc_hit() { hits++; }
@@ -455,7 +527,7 @@ class AircraftTracker {
      * is left untouched for frames that are rejected or deliberately not
      * logged (DF11, which arrives far too often to be worth a line). */
     bool handle_frame(adsb::AdsbFrame& frame,
-                      uint32_t amp,
+                      float amp,
                       uint32_t rx_timestamp,
                       AdsbLogEntry* log_out = nullptr,
                       bool* logged_out = nullptr);

@@ -151,6 +151,12 @@ class BleRxView : public ui::View {
     void on_hide() override;
     void on_frame_sync() override;
 
+    /* Read-only view of the advertisers heard, for
+     * src/remote/provider_ble_rx.cpp to publish to the web portal. Const by
+     * design: the portal only ever reads. Same idiom as
+     * AprsTableView::entries() (ui_aprs_rx.hpp). */
+    const BleRecentEntries& entries() const { return entries_; }
+
    private:
     void rebuild_front_end();
     void on_packet(const Packet& packet);

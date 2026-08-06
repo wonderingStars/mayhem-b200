@@ -731,6 +731,11 @@ class WeatherView : public ui::View {
     void on_frame_sync() override;
     void set_parent_rect(const ui::Rect new_parent_rect) override;
 
+    /* Read-only access to the decoded TPMS readings, so the web portal's panel
+     * provider (src/remote/provider_weather.cpp) can publish the same table this
+     * view draws. Same idiom as AprsTableView::entries(). */
+    const tpms::RecentEntries& entries() const { return recent_; }
+
    private:
     static constexpr ui::Dim header_height = 32;
 

@@ -363,6 +363,9 @@ class EpirbRxView : public ui::View {
     void on_hide() override;
     void on_frame_sync() override;
 
+    /* Read-only view of the beacon list, for src/remote/provider_epirb.cpp. */
+    const EpirbRecentEntries& entries() const { return entries_; }
+
    private:
     void rebuild_front_end();
     void on_frame_bits(const std::vector<uint8_t>& bits);

@@ -1,0 +1,24 @@
+{
+  "title": "ADS-B RX",
+  "columns": [
+    { "key": "icao", "label": "ICAO", "width": 7, "mono": true },
+    { "key": "callsign", "label": "Callsign", "width": 9, "mono": true },
+    { "key": "alt", "label": "Alt (ft)", "width": 8, "align": "right" },
+    { "key": "speed", "label": "Spd (kt)", "width": 8, "align": "right" },
+    { "key": "track", "label": "Trk", "width": 5, "align": "right" },
+    { "key": "msgs", "label": "Msgs", "width": 6, "align": "right" },
+    { "key": "info", "label": "Info", "width": 0 }
+  ],
+  "rows": [
+    { "key": "A1B2C3", "updated_at_ms": 1754300000000, "cells": { "icao": "A1B2C3", "callsign": "UAL123", "alt": "35,000", "speed": "412", "track": "271", "msgs": "1,204", "info": "Squawk 4102" } },
+    { "key": "4A2E19", "updated_at_ms": 1754299998000, "cells": { "icao": "4A2E19", "callsign": "BAW29X", "alt": "38,000", "speed": "447", "track": "090", "msgs": "876", "info": "Squawk 2143" } },
+    { "key": "3C6528", "updated_at_ms": 1754299991000, "cells": { "icao": "3C6528", "callsign": "DLH4YB", "alt": "12,400", "speed": "298", "track": "184", "msgs": "312", "info": "Descending" } },
+    { "key": "406B90", "updated_at_ms": 1754299980000, "cells": { "icao": "406B90", "callsign": "EZY81HN", "alt": "24,975", "speed": "389", "track": "045", "msgs": "1,988", "info": "Squawk 7000" } },
+    { "key": "A8C15F", "updated_at_ms": 1754299965000, "cells": { "icao": "A8C15F", "callsign": "", "alt": "5,500", "speed": "142", "track": "310", "msgs": "54", "info": "No callsign" } },
+    { "key": "780A22", "updated_at_ms": 1754299950000, "cells": { "icao": "780A22", "callsign": "AFR1180", "alt": "37,000", "speed": "455", "track": "271", "msgs": "2,301", "info": "Squawk 1000" } },
+    { "key": "3949B1", "updated_at_ms": 1754299944000, "cells": { "icao": "3949B1", "callsign": "RYR93QP", "alt": "18,025", "speed": "356", "track": "128", "msgs": "645", "info": "Climbing" } },
+    { "key": "AA55CC", "updated_at_ms": 1754299910000, "cells": { "icao": "AA55CC", "callsign": "N725EX", "alt": "9,000", "speed": "185", "track": "212", "msgs": "97", "info": "Squawk 4677" } }
+  ],
+  "row_count": 8,
+  "row_limit": 64
+}

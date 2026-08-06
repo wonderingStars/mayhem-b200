@@ -367,6 +367,23 @@ void MagnitudeResampler::process(const float* in, size_t count, std::vector<floa
 
 /* --- Demodulator ----------------------------------------------------------- */
 
+namespace {
+
+/* Weight given to a new block in the noise-floor average: about a ten-block
+ * time constant, which is a sixth of a second at the 60 Hz rate the app pumps
+ * at. Slow enough that one burst-heavy block cannot move the floor, quick
+ * enough to follow a gain change. */
+constexpr float kNoiseFloorAlpha = 0.1f;
+
+/* At most this many magnitudes per block go into the median. */
+constexpr size_t kNoiseFloorTaps = 512;
+
+/* For circularly symmetric Gaussian noise the median of |s|^2 is ln(2) times
+ * its mean, so dividing the median by this gives the mean noise power. */
+constexpr float kMedianOverMeanPower = 0.6931472f;
+
+}  // namespace
+
 void AdsbDemod::reset() {
     frame_.clear();
     decoding_ = false;
@@ -380,6 +397,58 @@ void AdsbDemod::reset() {
 
     resampler_.reset();
     mag_scratch_.clear();
+
+    /* noise_floor_power_ and reference_amplitude_ survive on purpose — see the
+     * note on reset() in the header. */
+}
+
+void AdsbDemod::set_reference_amplitude(float amplitude) {
+    reference_amplitude_ = (amplitude > 0.0f) ? amplitude : 0.0f;
+}
+
+float AdsbDemod::noise_floor() const {
+    return (noise_floor_power_ > 0.0f) ? std::sqrt(noise_floor_power_) : 0.0f;
+}
+
+float AdsbDemod::input_scale() const {
+    if (reference_amplitude_ > 0.0f) return kInt8FullScale / reference_amplitude_;
+    if (noise_floor_power_ > 0.0f) return kNoiseFloorCounts / std::sqrt(noise_floor_power_);
+
+    /* Nothing measured yet: upstream's literal mapping of full scale to 127. */
+    return kInt8FullScale;
+}
+
+void AdsbDemod::update_noise_floor(const float* mags, size_t count) {
+    if (count == 0) return;
+
+    /* The median, not the mean: a burst inside the block must not lift the
+     * floor it is being measured against. At 2 Msps a 112-bit frame is 120 us,
+     * 6% of the 4096-sample window the app hands over, and the mean climbs
+     * with every frame received; the median does not move until half the block
+     * is signal. Strided so the cost is bounded whatever the block size. */
+    const size_t stride = ((count + kNoiseFloorTaps - 1) / kNoiseFloorTaps);
+
+    noise_scratch_.clear();
+    for (size_t i = 0; i < count; i += stride) noise_scratch_.push_back(mags[i]);
+    if (noise_scratch_.empty()) return;
+
+    const size_t mid = noise_scratch_.size() / 2;
+    std::nth_element(noise_scratch_.begin(),
+                     noise_scratch_.begin() + static_cast<ptrdiff_t>(mid),
+                     noise_scratch_.end());
+
+    const float median = noise_scratch_[mid];
+
+    /* A block that is more than half exact silence says nothing about the
+     * noise floor — a synthesised waveform, or a stream that has not started.
+     * Keep whatever was measured before. */
+    if (!(median > 0.0f)) return;
+
+    const float power = median / kMedianOverMeanPower;
+
+    noise_floor_power_ = (noise_floor_power_ > 0.0f)
+                             ? noise_floor_power_ + (kNoiseFloorAlpha * (power - noise_floor_power_))
+                             : power;
 }
 
 void AdsbDemod::set_input_rate(double hz) {
@@ -395,12 +464,21 @@ void AdsbDemod::process(const dsp::cfloat* samples, size_t count, const FrameHan
     mag_raw_.reserve(count);
 
     for (size_t i = 0; i < count; i++) {
-        /* Scale to the int8 full scale the firmware's magnitudes are in, so the
-         * per-frame amplitude reported to the UI is on upstream's scale. */
-        const float re = samples[i].real() * 127.0f;
-        const float im = samples[i].imag() * 127.0f;
+        const float re = samples[i].real();
+        const float im = samples[i].imag();
         mag_raw_.push_back((re * re) + (im * im));
     }
+
+    /* Measure before scaling: the floor is a property of the input, not of the
+     * units the magnitudes are about to be expressed in. */
+    if (reference_amplitude_ <= 0.0f) update_noise_floor(mag_raw_.data(), mag_raw_.size());
+
+    /* Into the int8 units the firmware's magnitudes are in, so the per-frame
+     * amplitude reported to the UI is on upstream's scale. Magnitudes are
+     * powers, so an amplitude scale enters squared. */
+    const float scale = input_scale();
+    const float power_scale = scale * scale;
+    for (float& m : mag_raw_) m *= power_scale;
 
     mag_scratch_.clear();
     resampler_.process(mag_raw_.data(), mag_raw_.size(), mag_scratch_);
@@ -500,6 +578,18 @@ void AdsbDemod::process_one(float mag, const FrameHandler& on_frame) {
 AircraftRecentEntry::AircraftRecentEntry(uint32_t address)
     : ICAO_address{address} {
     icao_str = to_string_hex(address, 6);
+}
+
+uint32_t AircraftRecentEntry::amp_display() const {
+    /* Upstream's amp >> 9, on a value that is a float here. The comparison is
+     * written so that a NaN amplitude reads as zero rather than as whatever
+     * the conversion happens to produce. */
+    if (!(amp > 0.0f)) return 0;
+
+    const float scaled = amp / 512.0f;
+    if (scaled >= 4294967296.0f) return 0xFFFFFFFFu;
+
+    return static_cast<uint32_t>(scaled);
 }
 
 void AircraftRecentEntry::set_frame_pos(const adsb::AdsbFrame& frame, uint32_t parity) {
@@ -643,7 +733,7 @@ void AircraftTracker::age_entries(uint32_t delta, size_t max_entries) {
 }
 
 bool AircraftTracker::handle_frame(adsb::AdsbFrame& frame,
-                                   uint32_t amp,
+                                   float amp,
                                    uint32_t rx_timestamp,
                                    AdsbLogEntry* log_out,
                                    bool* logged_out) {
@@ -675,8 +765,10 @@ bool AircraftTracker::handle_frame(adsb::AdsbFrame& frame,
     entry.inc_hit();
     entry.reset_age();
 
-    /* Smoothed amplitude, upstream's 1/16 exponential average. */
-    entry.amp = first_hit ? amp : (((entry.amp * 15) + amp) >> 4);
+    /* Smoothed amplitude, upstream's 1/16 exponential average — in float, so
+     * that a run of sub-count frames averages instead of flooring to zero. */
+    if (amp < 0.0f) amp = 0.0f;
+    entry.amp = first_hit ? amp : (((entry.amp * 15.0f) + amp) / 16.0f);
 
     const uint8_t df = frame.get_DF();
 
@@ -811,10 +903,10 @@ void draw_aircraft_row(const AircraftRecentEntry& entry,
         const int32_t tas = entry.velo.speed +
                             (entry.pos.altitude * 2 * entry.velo.speed / 100000);
         entry_string += to_string_dec_int(tas, 4) + '*' +
-                        to_string_dec_uint(entry.amp >> 9, 3);
+                        to_string_dec_uint(entry.amp_display(), 3);
     } else {
         entry_string += to_string_dec_int(entry.velo.speed, 4) +
-                        to_string_dec_uint(entry.amp >> 9, 4);
+                        to_string_dec_uint(entry.amp_display(), 4);
     }
 
     entry_string += " " +
@@ -1153,9 +1245,7 @@ void AdsbRxView::pump() {
                        AdsbLogEntry log_entry;
                        bool logged = false;
                        const bool accepted = tracker_.handle_frame(
-                           frame,
-                           static_cast<uint32_t>(amp < 0.0f ? 0.0f : amp),
-                           seconds_, &log_entry, &logged);
+                           frame, amp, seconds_, &log_entry, &logged);
 
                        if (!accepted) return;
                        dot_good_frame_.toggle();

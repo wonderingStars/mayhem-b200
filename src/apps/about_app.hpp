@@ -17,8 +17,11 @@ namespace app {
 
 /* Project version, shown here and in the window title.
  * 0.9.0: full Mayhem app suite ported (~100 apps across all categories),
- * software-complete and tested, not yet verified against a physical B200. */
-constexpr const char* kVersion = "0.9.0";
+ * software-complete and tested, not yet verified against a physical B200.
+ * 0.9.1: ADS-B frame amplitude is referred to the measured noise floor and
+ * carried as a float, so the Amp column and the portal's Sig column report a
+ * real signal strength on a B200 instead of zero. */
+constexpr const char* kVersion = "0.9.1";
 
 class AboutView : public ui::View {
    public:

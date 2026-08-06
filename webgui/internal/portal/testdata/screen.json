@@ -1,0 +1,5 @@
+{
+  "app_name": "RF Jammer",
+  "category": "Transmit",
+  "reason": "This app doesn't have a structured web view yet -- it still works from the device's own screen/controls."
+}

@@ -66,8 +66,11 @@ TEST(device_info_label_prefers_product) {
     bare.type = "b200";
     CHECK_STR_EQ(bare.label(), "b200");
 
+    /* The generic fallback is "SDR", not "USRP": DeviceInfo is now shared by
+     * every backend (see radio_device.hpp), so an unidentified device must not
+     * claim to be a USRP. */
     radio::DeviceInfo unknown;
-    CHECK_STR_EQ(unknown.label(), "USRP");
+    CHECK_STR_EQ(unknown.label(), "SDR");
 }
 
 TEST(find_is_safe_with_no_hardware) {

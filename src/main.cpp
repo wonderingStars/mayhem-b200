@@ -13,9 +13,12 @@
 #include "audio/audio_in.hpp"
 #include "audio/audio_out.hpp"
 #include "core/file_path.hpp"
+#include "radio/network_radio.hpp"
 #include "radio/receiver_model.hpp"
 #include "radio/transmitter_model.hpp"
 #include "radio/usrp_radio.hpp"
+#include "remote/app_bridge.hpp"
+#include "remote/remote_server.hpp"
 #include "ui/display.hpp"
 #include "ui/theme.hpp"
 #include "ui/ui_painter.hpp"
@@ -26,6 +29,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <memory>
 #include <string>
 #include <thread>
 
@@ -64,10 +68,16 @@ class SystemView : public ui::View {
 };
 
 struct Options {
+    std::string driver{"uhd"};
     std::string device_args{};
     int scale{2};
     bool list_devices{false};
     bool help{false};
+
+    /* --portal[=port]: off by default. See remote/remote_server.hpp for what
+     * it serves and the "no authentication, LAN trust boundary" note. */
+    bool portal_enabled{false};
+    uint16_t portal_port{8090};
 };
 
 Options parse_args(int argc, char** argv) {
@@ -78,10 +88,17 @@ Options parse_args(int argc, char** argv) {
             o.help = true;
         } else if (arg == "--list") {
             o.list_devices = true;
+        } else if (arg.rfind("--driver=", 0) == 0) {
+            o.driver = arg.substr(9);
         } else if (arg.rfind("--args=", 0) == 0) {
             o.device_args = arg.substr(7);
         } else if (arg.rfind("--scale=", 0) == 0) {
             o.scale = std::atoi(arg.c_str() + 8);
+        } else if (arg == "--portal") {
+            o.portal_enabled = true;
+        } else if (arg.rfind("--portal=", 0) == 0) {
+            o.portal_enabled = true;
+            o.portal_port = static_cast<uint16_t>(std::atoi(arg.c_str() + 9));
         }
     }
     return o;
@@ -92,10 +109,16 @@ void print_help() {
         "mayhem-b200 %s - PortaPack Mayhem for the Ettus USRP B200\n"
         "\n"
         "Usage: mayhem-b200 [options]\n"
-        "  --args=<uhd args>  Device address, e.g. --args=type=b200,serial=31C9297\n"
-        "  --scale=<1..6>     Window magnification (default 2)\n"
-        "  --list             List attached USRP devices and exit\n"
-        "  --help             This text\n"
+        "  --driver=<uhd|sdrlink>  Radio backend (default uhd)\n"
+        "  --args=<backend args>   uhd: device address, e.g. type=b200,serial=31C9297\n"
+        "                          sdrlink: host[:port] of an sdrlink server, e.g.\n"
+        "                          --driver=sdrlink --args=127.0.0.1:5960\n"
+        "  --scale=<1..6>          Window magnification (default 2)\n"
+        "  --list                  List attached USRP devices and exit (uhd only)\n"
+        "  --portal[=port]         Serve the JSON web portal API (default port 8090).\n"
+        "                          LAN-reachable, unauthenticated: same trust as a\n"
+        "                          terminal on this machine. Off unless given.\n"
+        "  --help                  This text\n"
         "\n"
         "Controls: arrows navigate and tune, Enter selects, Esc goes back,\n"
         "mouse wheel is the encoder, the mouse is the touch screen, F11 rescales.\n",
@@ -164,14 +187,26 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    radio::UsrpRadio radio;
+    /* --driver selects the backend behind the RadioDevice interface; nothing
+     * past this point needs to know which one it is talking to. */
+    std::unique_ptr<radio::RadioDevice> radio_backend;
+    if (options.driver == "sdrlink") {
+        radio_backend = std::make_unique<radio::NetworkRadio>();
+    } else if (options.driver == "uhd") {
+        radio_backend = std::make_unique<radio::UsrpRadio>();
+    } else {
+        std::fprintf(stderr, "unknown --driver=%s (expected uhd or sdrlink)\n", options.driver.c_str());
+        return 1;
+    }
+    radio::RadioDevice& radio = *radio_backend;
+
     audio::AudioOut audio_out;
 
     const bool radio_ok = radio.open(options.device_args);
     if (!radio_ok) {
         /* Not fatal. The UI is useful without hardware, and Radio setup has a
          * Reconnect button for when the device shows up. */
-        std::fprintf(stderr, "no USRP opened: %s\n", radio.last_error().c_str());
+        std::fprintf(stderr, "no %s device opened: %s\n", radio.driver_name(), radio.last_error().c_str());
     }
 
     if (!audio_out.start()) {
@@ -202,6 +237,25 @@ int main(int argc, char** argv) {
     system_view.navigation().service();
     system_view.refresh_status();
 
+    /* The portal is pumped from this same thread's main loop below
+     * (drain_launch_queue() + refresh(), both UI-thread-only by contract —
+     * see remote/app_bridge.hpp's file header) rather than getting its own
+     * "UI" thread: there already is exactly one thread that owns
+     * app::globals().nav and every app's view state, and every design here
+     * is about respecting that, not adding a second one. RemoteServer's own
+     * accept loop and per-connection handlers do run on their own threads
+     * (necessarily — Winsock's accept()/recv() block), but they only ever
+     * reach into app state through AppBridge's queue and cache, never
+     * directly. */
+    remote::RemoteServer portal_server;
+    if (options.portal_enabled) {
+        if (portal_server.start(options.portal_port)) {
+            std::printf("Web portal: http://127.0.0.1:%u/\n", portal_server.port());
+        } else {
+            std::fprintf(stderr, "portal failed to start: %s\n", portal_server.last_error().c_str());
+        }
+    }
+
     ui::Painter painter;
     app::EventDispatcher dispatcher{system_view, system_view.context()};
     dispatcher.on_back = [&system_view] { system_view.navigation().pop(); };
@@ -219,6 +273,10 @@ int main(int argc, char** argv) {
         }
         if (!running) break;
 
+        /* Applies any queued portal launch()/home() request before service()
+         * so the same frame's service() call both performs it and reports
+         * the change, exactly as a locally-driven push/pop would. */
+        if (options.portal_enabled) remote::AppBridge::instance().drain_launch_queue();
         if (system_view.navigation().service()) system_view.refresh_status();
 
         /* Status bar reflects the live radio state. */
@@ -233,6 +291,11 @@ int main(int argc, char** argv) {
         status.set_receiving(receiver.running());
         status.set_transmitting(radio.tx_running());
 
+        /* Recomputes the cached status/current-app/panel JSON the HTTP
+         * handlers read. UI-thread-only, once per frame — see
+         * AppBridge::refresh()'s own doc for why. */
+        if (options.portal_enabled) remote::AppBridge::instance().refresh();
+
         system_view.on_frame_sync();
         painter.paint_widget_tree(&system_view);
         window.present();
@@ -246,6 +309,8 @@ int main(int argc, char** argv) {
         else
             next_frame = now;
     }
+
+    portal_server.stop();
 
     receiver.stop();
     transmitter.stop();

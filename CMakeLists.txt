@@ -79,12 +79,13 @@ endif()
 # Core library — everything except main() and the tests
 # ---------------------------------------------------------------------------
 
-file(GLOB MB200_UI_SOURCES    CONFIGURE_DEPENDS src/ui/*.cpp)
-file(GLOB MB200_CORE_SOURCES  CONFIGURE_DEPENDS src/core/*.cpp)
-file(GLOB MB200_DSP_SOURCES   CONFIGURE_DEPENDS src/dsp/*.cpp)
-file(GLOB MB200_RADIO_SOURCES CONFIGURE_DEPENDS src/radio/*.cpp)
-file(GLOB MB200_AUDIO_SOURCES CONFIGURE_DEPENDS src/audio/*.cpp)
-file(GLOB MB200_APPS_SOURCES  CONFIGURE_DEPENDS src/apps/*.cpp)
+file(GLOB MB200_UI_SOURCES     CONFIGURE_DEPENDS src/ui/*.cpp)
+file(GLOB MB200_CORE_SOURCES   CONFIGURE_DEPENDS src/core/*.cpp)
+file(GLOB MB200_DSP_SOURCES    CONFIGURE_DEPENDS src/dsp/*.cpp)
+file(GLOB MB200_RADIO_SOURCES  CONFIGURE_DEPENDS src/radio/*.cpp)
+file(GLOB MB200_AUDIO_SOURCES  CONFIGURE_DEPENDS src/audio/*.cpp)
+file(GLOB MB200_APPS_SOURCES   CONFIGURE_DEPENDS src/apps/*.cpp)
+file(GLOB MB200_REMOTE_SOURCES CONFIGURE_DEPENDS src/remote/*.cpp)
 
 # OBJECT, not STATIC: apps self-register through a file-scope Registrar and are
 # reached only through the registry, never named directly. A static library's
@@ -98,6 +99,7 @@ add_library(mb200 OBJECT
     ${MB200_RADIO_SOURCES}
     ${MB200_AUDIO_SOURCES}
     ${MB200_APPS_SOURCES}
+    ${MB200_REMOTE_SOURCES}
 )
 
 target_include_directories(mb200 PUBLIC
@@ -108,13 +110,15 @@ target_include_directories(mb200 PUBLIC
     src/radio
     src/audio
     src/apps
+    src/remote
 )
 target_include_directories(mb200 SYSTEM PUBLIC "${UHD_INCLUDE_DIR}" "${BOOST_INCLUDE_DIR}")
 target_link_libraries(mb200 PUBLIC mb200_flags "${UHD_LIBRARY}")
 
 if(WIN32)
     # gdi32/user32: the window and framebuffer blit. winmm: waveOut/waveIn audio.
-    target_link_libraries(mb200 PUBLIC gdi32 user32 winmm)
+    # ws2_32: Winsock, for NetworkRadio's sdrlink client (src/radio/network_radio.cpp).
+    target_link_libraries(mb200 PUBLIC gdi32 user32 winmm ws2_32)
 endif()
 
 # ---------------------------------------------------------------------------

@@ -32,6 +32,7 @@
 #define __MB200_USRP_RADIO_H__
 
 #include "../dsp/ring_buffer.hpp"
+#include "radio_device.hpp"
 
 #include <atomic>
 #include <complex>
@@ -44,71 +45,14 @@
 
 namespace radio {
 
-using cfloat = std::complex<float>;
+/* Range, DeviceInfo, DeviceCaps, StreamStats and the RadioDevice interface all
+ * live in radio_device.hpp — they are shared by every backend, not specific to
+ * UHD. This file is only the USRP implementation of that interface. */
 
-struct Range {
-    double min{0.0};
-    double max{0.0};
-    double step{0.0};
-
-    double clamp(double v) const;
-    bool contains(double v) const { return v >= min && v <= max; }
-};
-
-/* What a discovery scan found, before anything is opened. */
-struct DeviceInfo {
-    std::string type;      /* "b200", "b210", ... */
-    std::string serial;
-    std::string name;
-    std::string product;
-    std::string args;      /* pass back to open() to select this device */
-
-    std::string label() const;
-};
-
-/* Capabilities read back from a live device. */
-struct DeviceCaps {
-    std::string mboard;      /* e.g. "B200" */
-    std::string serial;
-    std::string fpga_version;
-    std::string fw_version;
-
-    Range rx_freq{};
-    Range tx_freq{};
-    Range rx_gain{};
-    Range tx_gain{};
-    Range rx_rate{};
-    Range tx_rate{};
-    Range rx_bandwidth{};
-    Range tx_bandwidth{};
-
-    double master_clock_rate{0.0};
-
-    std::vector<std::string> rx_antennas;
-    std::vector<std::string> tx_antennas;
-
-    size_t rx_channels{0};
-    size_t tx_channels{0};
-};
-
-/* Counters the UI surfaces so streaming problems are visible rather than
- * silently degrading the audio. */
-struct StreamStats {
-    std::atomic<uint64_t> rx_samples{0};
-    std::atomic<uint64_t> tx_samples{0};
-    std::atomic<uint32_t> overflows{0};   /* device -> host, 'O' */
-    std::atomic<uint32_t> underflows{0};  /* host -> device, 'U' */
-    std::atomic<uint32_t> rx_dropped{0};  /* ring full: DSP thread too slow */
-    std::atomic<uint32_t> timeouts{0};
-    std::atomic<uint32_t> errors{0};
-
-    void reset();
-};
-
-class UsrpRadio {
+class UsrpRadio : public RadioDevice {
    public:
     UsrpRadio();
-    ~UsrpRadio();
+    ~UsrpRadio() override;
 
     UsrpRadio(const UsrpRadio&) = delete;
     UsrpRadio& operator=(const UsrpRadio&) = delete;
@@ -121,12 +65,14 @@ class UsrpRadio {
     /* Opens a device. `args` is a UHD device-address string, e.g.
      * "type=b200,serial=31C9297". Empty picks the first B200-family device.
      * Returns false and sets last_error() on failure. */
-    bool open(const std::string& args = "");
-    void close();
-    bool is_open() const { return open_.load(); }
+    bool open(const std::string& args = "") override;
+    void close() override;
+    bool is_open() const override { return open_.load(); }
 
-    const DeviceCaps& caps() const { return caps_; }
-    const std::string& last_error() const { return last_error_; }
+    const DeviceCaps& caps() const override { return caps_; }
+    const std::string& last_error() const override { return last_error_; }
+
+    const char* driver_name() const override { return "uhd"; }
 
     /* --- Configuration ---
      * All of these are safe to call while streaming; UHD applies them between
@@ -135,76 +81,76 @@ class UsrpRadio {
 
     /* The master clock rate constrains every achievable sample rate. Changing
      * it re-tunes the AD936x PLL, so do it before starting a stream. */
-    double set_master_clock_rate(double rate_hz);
+    double set_master_clock_rate(double rate_hz) override;
 
-    double set_rx_rate(double rate_hz);
-    double rx_rate() const { return rx_rate_; }
+    double set_rx_rate(double rate_hz) override;
+    double rx_rate() const override { return rx_rate_; }
 
-    double set_tx_rate(double rate_hz);
-    double tx_rate() const { return tx_rate_; }
+    double set_tx_rate(double rate_hz) override;
+    double tx_rate() const override { return tx_rate_; }
 
     /* Tunes to `freq_hz`. With a non-zero LO offset the RF LO is placed
      * `lo_offset` away and the CORDIC brings the signal back to baseband. */
-    double set_rx_frequency(double freq_hz);
-    double rx_frequency() const { return rx_freq_; }
+    double set_rx_frequency(double freq_hz) override;
+    double rx_frequency() const override { return rx_freq_; }
 
-    double set_tx_frequency(double freq_hz);
-    double tx_frequency() const { return tx_freq_; }
+    double set_tx_frequency(double freq_hz) override;
+    double tx_frequency() const override { return tx_freq_; }
 
-    void set_lo_offset(double offset_hz);
-    double lo_offset() const { return lo_offset_; }
+    void set_lo_offset(double offset_hz) override;
+    double lo_offset() const override { return lo_offset_; }
 
-    double set_rx_gain(double gain_db);
-    double rx_gain() const { return rx_gain_; }
+    double set_rx_gain(double gain_db) override;
+    double rx_gain() const override { return rx_gain_; }
 
-    double set_tx_gain(double gain_db);
-    double tx_gain() const { return tx_gain_; }
+    double set_tx_gain(double gain_db) override;
+    double tx_gain() const override { return tx_gain_; }
 
-    double set_rx_bandwidth(double bw_hz);
-    double rx_bandwidth() const { return rx_bw_; }
+    double set_rx_bandwidth(double bw_hz) override;
+    double rx_bandwidth() const override { return rx_bw_; }
 
-    double set_tx_bandwidth(double bw_hz);
-    double tx_bandwidth() const { return tx_bw_; }
+    double set_tx_bandwidth(double bw_hz) override;
+    double tx_bandwidth() const override { return tx_bw_; }
 
-    bool set_rx_antenna(const std::string& antenna);
-    const std::string& rx_antenna() const { return rx_antenna_; }
+    bool set_rx_antenna(const std::string& antenna) override;
+    const std::string& rx_antenna() const override { return rx_antenna_; }
 
-    bool set_tx_antenna(const std::string& antenna);
-    const std::string& tx_antenna() const { return tx_antenna_; }
+    bool set_tx_antenna(const std::string& antenna) override;
+    const std::string& tx_antenna() const override { return tx_antenna_; }
 
     /* AD936x automatic corrections. Both default to on: the DC offset
      * correction in particular removes most of the centre spike. */
-    void set_rx_dc_offset_auto(bool enable);
-    void set_rx_iq_balance_auto(bool enable);
+    void set_rx_dc_offset_auto(bool enable) override;
+    void set_rx_iq_balance_auto(bool enable) override;
 
     /* AGC in the AD936x itself, distinct from the audio AGC. */
-    bool set_rx_agc(bool enable);
+    bool set_rx_agc(bool enable) override;
 
     /* --- Streaming --- */
 
     /* Starts the RX thread. Samples land in rx_ring(). */
-    bool start_rx();
-    void stop_rx();
-    bool rx_running() const { return rx_running_.load(); }
+    bool start_rx() override;
+    void stop_rx() override;
+    bool rx_running() const override { return rx_running_.load(); }
 
     /* Starts the TX thread. It drains tx_ring(), sending zeros on underrun so
      * the transmitter does not glitch. */
-    bool start_tx();
-    void stop_tx();
-    bool tx_running() const { return tx_running_.load(); }
+    bool start_tx() override;
+    void stop_tx() override;
+    bool tx_running() const override { return tx_running_.load(); }
 
-    dsp::RingBuffer<cfloat>& rx_ring() { return *rx_ring_; }
-    dsp::RingBuffer<cfloat>& tx_ring() { return *tx_ring_; }
+    dsp::RingBuffer<cfloat>& rx_ring() override { return *rx_ring_; }
+    dsp::RingBuffer<cfloat>& tx_ring() override { return *tx_ring_; }
 
-    StreamStats& stats() { return stats_; }
-    const StreamStats& stats() const { return stats_; }
+    StreamStats& stats() override { return stats_; }
+    const StreamStats& stats() const override { return stats_; }
 
     /* Instantaneous RSSI-ish measure: RMS of the most recent RX block, in
      * dBFS. Updated by the RX thread. */
-    float rx_level_db() const { return rx_level_db_.load(); }
+    float rx_level_db() const override { return rx_level_db_.load(); }
 
     /* Sizes the RX/TX rings in samples. Must be called before start_*(). */
-    void set_ring_capacity(size_t samples);
+    void set_ring_capacity(size_t samples) override;
 
    private:
     void rx_thread_main();

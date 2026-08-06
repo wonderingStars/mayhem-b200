@@ -2181,6 +2181,11 @@ class SubCarView : public ui::View {
     void on_hide() override;
     void on_frame_sync() override;
 
+    /* Read-only access to the decoded key-fob list, so the web portal's panel
+     * provider (src/remote/provider_subcar.cpp) can publish the same table this
+     * view draws. Same idiom as AprsTableView::entries(). */
+    const subcar::RecentEntries& entries() const { return recent_; }
+
    private:
     void rebuild_channel_filter();
     void on_decoded(subcar::CarProtocol& proto);

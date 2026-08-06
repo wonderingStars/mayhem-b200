@@ -21,8 +21,10 @@
 #include "app_registry.hpp"
 #include "ui_adsb_rx.hpp"
 
+#include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <random>
 #include <string>
 #include <vector>
 
@@ -132,6 +134,44 @@ std::vector<dsp::cfloat> to_complex(const std::vector<float>& mags) {
     return out;
 }
 
+/* One burst as a B200 actually delivers it: a Gaussian noise floor with an
+ * on/off keyed frame sitting a fixed number of dB above it, the whole thing
+ * scaled to the absolute level the hardware produces. `noise_rms` is per
+ * component, so |s| averages noise_rms * sqrt(2); `signal` is the amplitude of
+ * a preamble/bit pulse on the real axis.
+ *
+ * The frame goes a third of the way into a block the size of the one the app
+ * pumps, so the block looks like the real thing: mostly floor, one short
+ * burst. The seed is explicit, so a given level always produces exactly the
+ * same waveform. */
+std::vector<dsp::cfloat> make_noisy_burst(const std::vector<uint8_t>& bytes,
+                                          size_t bit_count,
+                                          float signal,
+                                          float noise_rms,
+                                          size_t total_samples = 4096,
+                                          uint32_t seed = 1) {
+    /* The 0/1 magnitude pattern doubles as the 0/1 amplitude envelope. */
+    const auto envelope = make_ppm_magnitudes(bytes, bit_count, 1.0f, 0.0f, 0, 0);
+
+    std::mt19937 rng{seed};
+    std::normal_distribution<float> noise{0.0f, noise_rms};
+
+    std::vector<dsp::cfloat> out;
+    out.reserve(total_samples);
+
+    const size_t start = total_samples / 3;
+
+    for (size_t i = 0; i < total_samples; i++) {
+        float re = noise(rng);
+        const float im = noise(rng);
+        if (i >= start && (i - start) < envelope.size())
+            re += signal * envelope[i - start];
+        out.emplace_back(re, im);
+    }
+
+    return out;
+}
+
 /* Builds an airborne-position message (TC 11) from its fields, using upstream's
  * encode_frame_pos layout: altitude with the Q bit inserted at position 4, then
  * the frame parity bit and the two 17-bit CPR words. Verified against the
@@ -160,6 +200,8 @@ AdsbFrame make_pos_frame(uint32_t icao, int32_t altitude_ft,
 }
 
 struct Capture {
+    static constexpr size_t none = static_cast<size_t>(-1);
+
     std::vector<AdsbFrame> frames;
     std::vector<float> amps;
 
@@ -187,6 +229,22 @@ std::string hex_of(const AdsbFrame& frame, size_t n) {
         s += digits[raw[i] & 0xF];
     }
     return s;
+}
+
+/* Index of the emitted frame that is the wanted one, or Capture::none.
+ *
+ * Noise triggers preambles of its own — the demodulator forwards everything it
+ * locks onto and CRC filtering is the app's job, which on live traffic means
+ * roughly sixty rejected frames for every accepted one (measured on this
+ * hardware: 28960 emitted, 481 accepted). So a test on a noisy stream picks
+ * its frame out by CRC and contents rather than assuming the only frame
+ * emitted is the one it sent. */
+size_t find_good_frame(const Capture& cap, const std::string& hex) {
+    for (size_t i = 0; i < cap.frames.size(); i++) {
+        if (cap.frames[i].check_CRC() != 0) continue;
+        if (hex_of(cap.frames[i], 14) == hex) return i;
+    }
+    return Capture::none;
 }
 
 }  // namespace
@@ -794,6 +852,211 @@ TEST(adsb_demod_from_complex_samples) {
         CHECK_STR_EQ(hex_of(cap.frames[0], 14), std::string{kFrameIdent});
 }
 
+/* --- Amplitude scale -------------------------------------------------------
+ *
+ * The bug these guard: AdsbDemod used to map a +/-1.0 host sample onto 127
+ * int8 counts, which is upstream's mapping only if the front end is driven to
+ * full scale. Measured on live traffic (B200 EDR04ZDB2, 40 dB gain,
+ * 2026-08-04): the noise floor sat at -66 dBFS and a decoded frame's four
+ * preamble magnitudes summed to 0.09..1.8 on that mapping, so every reported
+ * amplitude truncated to zero on its way into the app — 6+ aircraft tracked
+ * correctly, all of them showing a signal strength of 0. */
+
+TEST(adsb_demod_amplitude_is_nonzero_for_a_weak_b200_signal) {
+    /* Levels from the bench: |s| about 5e-4 (-66 dBFS) for the floor, and a
+     * frame roughly 17 dB above it. In absolute terms that is 60 dB below the
+     * converter's full scale, which is exactly the case the old scale lost. */
+    const float noise_rms = 3.5e-4f;
+    const float signal = 3.5e-3f;
+
+    const auto iq = make_noisy_burst(bytes_from_hex(kFrameIdent), 112, signal, noise_rms);
+
+    app::adsb::AdsbDemod demod;
+    demod.set_input_rate(app::adsb::AdsbDemod::kNativeSampleRate);
+
+    Capture cap;
+    demod.process(iq.data(), iq.size(), cap.handler());
+
+    /* Decoding is unaffected by the scale — the detector only ever compares
+     * magnitudes with each other — so the frame must still come out intact. */
+    const size_t idx = find_good_frame(cap, kFrameIdent);
+    CHECK(idx != Capture::none);
+    if (idx == Capture::none) return;
+
+    /* The floor was measured, and from the input rather than from the scaled
+     * magnitudes: |s| = noise_rms * sqrt(2). */
+    CHECK_NEAR(demod.noise_floor(), noise_rms * 1.41421356f, noise_rms * 0.15f);
+
+    /* And the amplitude survives the trip to the display. */
+    CHECK(cap.amps[idx] > 0.0f);
+
+    app::AircraftTracker tracker;
+    AdsbFrame frame = cap.frames[idx];
+    CHECK(tracker.handle_frame(frame, cap.amps[idx], 1));
+
+    const auto* entry = tracker.find(0x4840D6);
+    CHECK(entry != nullptr);
+    if (!entry) return;
+
+    CHECK(entry->amp > 0.0f);
+    CHECK(entry->amp_display() > 0u);
+
+    /* The displayed number is about twice the preamble's power ratio to the
+     * floor — here (3.5e-3)^2 / (2 * 3.5e-4^2) = 50, so around 100. That is
+     * the property that makes it comparable with upstream's: a signal 17 dB
+     * over the floor lands in the same part of the 0..255 the UI has room for
+     * as it does on a PortaPack. */
+    CHECK(entry->amp_display() > 50u);
+    CHECK(entry->amp_display() < 200u);
+
+    /* And the behaviour this test exists to prevent coming back: with the
+     * scale referred to the converter's full scale — upstream's literal
+     * mapping, and what this port did — the very same waveform reports an
+     * amplitude below one count, which is what reached the screen as 0. */
+    app::adsb::AdsbDemod full_scale;
+    full_scale.set_reference_amplitude(1.0f);
+    full_scale.set_input_rate(app::adsb::AdsbDemod::kNativeSampleRate);
+
+    Capture old_cap;
+    full_scale.process(iq.data(), iq.size(), old_cap.handler());
+
+    const size_t old_idx = find_good_frame(old_cap, kFrameIdent);
+    CHECK(old_idx != Capture::none);
+    if (old_idx == Capture::none) return;
+
+    CHECK(old_cap.amps[old_idx] < 1.0f);
+
+    app::AircraftRecentEntry full_scale_entry{0x4840D6};
+    full_scale_entry.amp = old_cap.amps[old_idx];
+    CHECK_EQ(full_scale_entry.amp_display(), 0u);
+}
+
+TEST(adsb_demod_amplitude_scales_with_input_level) {
+    /* Same noise floor and the same noise realisation each time, so only the
+     * signal moves. Amplitude is a power measure, so doubling the input
+     * amplitude must roughly quadruple it. */
+    const float noise_rms = 3.5e-4f;
+
+    float previous = 0.0f;
+    float previous_level = 0.0f;
+
+    for (float level : {2.5e-3f, 5.0e-3f, 1.0e-2f, 2.0e-2f}) {
+        const auto iq = make_noisy_burst(bytes_from_hex(kFrameIdent), 112, level, noise_rms);
+
+        app::adsb::AdsbDemod demod;
+        demod.set_input_rate(app::adsb::AdsbDemod::kNativeSampleRate);
+
+        Capture cap;
+        demod.process(iq.data(), iq.size(), cap.handler());
+
+        const size_t idx = find_good_frame(cap, kFrameIdent);
+        CHECK(idx != Capture::none);
+        if (idx == Capture::none) return;
+
+        const float amp = cap.amps[idx];
+        CHECK(amp > 0.0f);
+        CHECK(amp > previous);
+
+        if (previous > 0.0f) {
+            /* (level / previous_level)^2 = 4, give or take the noise riding on
+             * the preamble samples. */
+            const float ratio = amp / previous;
+            const float expected = (level / previous_level) * (level / previous_level);
+            CHECK_NEAR(ratio, expected, expected * 0.15f);
+        }
+
+        previous = amp;
+        previous_level = level;
+    }
+}
+
+TEST(adsb_demod_reference_amplitude_reproduces_upstreams_scale) {
+    /* With the reference set to the sample amplitude that means full scale,
+     * the scale is upstream's literal one: a preamble pulse at full scale is
+     * 127 counts, its magnitude 127^2, and a frame's amp four of those —
+     * 64516, which the UI renders as 64516 >> 9 = 126. */
+    const auto mags = make_ppm_magnitudes(bytes_from_hex(kFrameIdent), 112);
+
+    std::vector<dsp::cfloat> iq;
+    iq.reserve(mags.size());
+    for (float m : mags) iq.emplace_back(std::sqrt(m), 0.0f);
+
+    app::adsb::AdsbDemod demod;
+    demod.set_reference_amplitude(1.0f);
+    demod.set_input_rate(app::adsb::AdsbDemod::kNativeSampleRate);
+
+    Capture cap;
+    demod.process(iq.data(), iq.size(), cap.handler());
+
+    CHECK_EQ(cap.frames.size(), size_t{1});
+    if (cap.frames.empty()) return;
+
+    CHECK_NEAR(cap.amps[0], 4.0f * 127.0f * 127.0f, 1.0f);
+
+    app::AircraftRecentEntry entry{0x4840D6};
+    entry.amp = cap.amps[0];
+    CHECK_EQ(entry.amp_display(), 126u);
+
+    /* An explicit reference also switches the noise tracking off. */
+    CHECK_NEAR(demod.noise_floor(), 0.0f, 1e-12);
+    CHECK_NEAR(demod.input_scale(), 127.0f, 1e-3);
+}
+
+TEST(adsb_demod_noise_floor_survives_the_per_block_reset) {
+    /* AdsbRxView::pump() resets the demodulator for every block it takes off
+     * the spectrum tap, because successive blocks are not adjacent in time. If
+     * that reset cleared the measured floor, the scale would never be measured
+     * at all and the amplitude would be back to reporting zero. */
+    const float noise_rms = 3.5e-4f;
+    const auto iq = make_noisy_burst(bytes_from_hex(kFrameIdent), 112, 3.5e-3f, noise_rms);
+
+    app::adsb::AdsbDemod demod;
+    demod.set_input_rate(app::adsb::AdsbDemod::kNativeSampleRate);
+
+    Capture cap;
+    demod.process(iq.data(), iq.size(), cap.handler());
+
+    const float floor_before = demod.noise_floor();
+    const float scale_before = demod.input_scale();
+    CHECK(floor_before > 0.0f);
+
+    demod.reset();
+
+    CHECK_NEAR(demod.noise_floor(), floor_before, 1e-12);
+    CHECK_NEAR(demod.input_scale(), scale_before, 1e-3);
+
+    /* The same block after a reset reports the same amplitude, so nothing
+     * about the per-block reset changes what the operator sees. */
+    Capture cap2;
+    demod.process(iq.data(), iq.size(), cap2.handler());
+
+    const size_t first = find_good_frame(cap, kFrameIdent);
+    const size_t second = find_good_frame(cap2, kFrameIdent);
+    CHECK(first != Capture::none);
+    CHECK(second != Capture::none);
+    if (first == Capture::none || second == Capture::none) return;
+
+    CHECK_NEAR(cap2.amps[second], cap.amps[first], cap.amps[first] * 0.02f);
+}
+
+TEST(adsb_demod_magnitude_path_is_left_in_the_callers_units) {
+    /* process_magnitudes() is documented as taking magnitudes in whatever
+     * units the caller has and handing the amplitude back in those same units:
+     * no scaling, no noise measurement. Upstream's own baseband works this
+     * way, and the resampler tests depend on it. */
+    const auto mags = make_ppm_magnitudes(bytes_from_hex(kFrameIdent), 112, 4.0f, 0.0f);
+
+    app::adsb::AdsbDemod demod;
+    Capture cap;
+    demod.process_magnitudes(mags.data(), mags.size(), cap.handler());
+
+    CHECK_EQ(cap.frames.size(), size_t{1});
+    if (cap.amps.empty()) return;
+
+    CHECK_NEAR(cap.amps[0], 16.0f, 1e-5);
+    CHECK_NEAR(demod.noise_floor(), 0.0f, 1e-12);
+}
+
 TEST(adsb_demod_resamples_from_4msps) {
     /* 4 Msps is what a device that cannot do exactly 2 Msps might deliver. The
      * interpolator has to bring it back to two samples per bit. */
@@ -976,7 +1239,7 @@ TEST(adsb_tracker_accepts_and_parses_a_burst) {
     CHECK_STR_EQ(entry->callsign, "KLM1023 ");
     CHECK_STR_EQ(entry->icao_str, "4840D6");
     CHECK_EQ(entry->hits, uint16_t{1});
-    CHECK_EQ(entry->amp, 1000u);
+    CHECK_NEAR(entry->amp, 1000.0f, 1e-3);
 }
 
 TEST(adsb_tracker_builds_a_position_from_a_pair) {
@@ -1090,12 +1353,55 @@ TEST(adsb_tracker_amplitude_is_smoothed) {
 
     AdsbFrame f1 = frame_from_hex(kFrameIdent);
     CHECK(tracker.handle_frame(f1, 1600, 1));
-    CHECK_EQ(tracker.find(0x4840D6)->amp, 1600u);
+    CHECK_NEAR(tracker.find(0x4840D6)->amp, 1600.0f, 1e-3);
 
     /* Upstream's 1/16 exponential average: (1600*15 + 3200)/16 = 1700. */
     AdsbFrame f2 = frame_from_hex(kFrameIdent);
     CHECK(tracker.handle_frame(f2, 3200, 2));
-    CHECK_EQ(tracker.find(0x4840D6)->amp, 1700u);
+    CHECK_NEAR(tracker.find(0x4840D6)->amp, 1700.0f, 1e-3);
+}
+
+TEST(adsb_tracker_smooths_sub_count_amplitudes_without_flooring_them) {
+    /* The amplitudes a B200 actually produces are fractions of an int8 count
+     * when the scale is not referred to the noise floor, and upstream's
+     * integer average turns a run of them into a permanent zero. */
+    app::AircraftTracker tracker;
+
+    AdsbFrame f1 = frame_from_hex(kFrameIdent);
+    CHECK(tracker.handle_frame(f1, 0.30f, 1));
+    CHECK_NEAR(tracker.find(0x4840D6)->amp, 0.30f, 1e-6);
+
+    AdsbFrame f2 = frame_from_hex(kFrameIdent);
+    CHECK(tracker.handle_frame(f2, 0.46f, 2));
+
+    /* (0.30*15 + 0.46)/16 = 0.31. */
+    CHECK_NEAR(tracker.find(0x4840D6)->amp, 0.31f, 1e-6);
+    CHECK(tracker.find(0x4840D6)->amp > 0.0f);
+}
+
+TEST(adsb_entry_amp_display_is_upstreams_shift) {
+    app::AircraftRecentEntry entry{0x4840D6};
+
+    /* Upstream renders amp >> 9. */
+    entry.amp = 64516.0f;  /* four preamble samples at int8 full scale */
+    CHECK_EQ(entry.amp_display(), 126u);
+
+    entry.amp = 511.0f;
+    CHECK_EQ(entry.amp_display(), 0u);
+
+    entry.amp = 512.0f;
+    CHECK_EQ(entry.amp_display(), 1u);
+
+    /* Sub-count and negative amplitudes read as zero rather than as junk. */
+    entry.amp = 0.3f;
+    CHECK_EQ(entry.amp_display(), 0u);
+
+    entry.amp = -1.0f;
+    CHECK_EQ(entry.amp_display(), 0u);
+
+    /* An absurd amplitude saturates instead of wrapping through the cast. */
+    entry.amp = 1e30f;
+    CHECK_EQ(entry.amp_display(), 0xFFFFFFFFu);
 }
 
 TEST(adsb_tracker_ages_and_expires) {
@@ -1305,8 +1611,7 @@ TEST(adsb_end_to_end_waveform_to_tracked_aircraft) {
     demod.process_magnitudes(stream.data(), stream.size(),
                              [&tracker, &rx_time](const AdsbFrame& f, float amp) {
                                  AdsbFrame frame = f;
-                                 tracker.handle_frame(frame, static_cast<uint32_t>(amp),
-                                                      rx_time++);
+                                 tracker.handle_frame(frame, amp, rx_time++);
                              });
 
     CHECK_EQ(tracker.frames_seen(), 3u);

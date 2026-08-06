@@ -1,0 +1,307 @@
+<!-- SPDX-License-Identifier: GPL-2.0-or-later -->
+<!-- Part of mayhem-b200. Originally written for sdrlink (MIT) and relicensed
+     here by its author/copyright holder into this GPL-2.0-or-later project. -->
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>sdrlink</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%230a0e14'/%3E%3Cpath d='M16 6v14M16 6l-6 4M16 6l6 4' stroke='%2334d8c3' stroke-width='2' fill='none' stroke-linecap='round'/%3E%3Ccircle cx='16' cy='24' r='2.5' fill='%2334d8c3'/%3E%3C/svg%3E" />
+<link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+<div id="app">
+
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-mark">sdr<span class="accent">link</span></span>
+      <span class="brand-sub">radio server</span>
+    </div>
+    <div class="topbar-metrics">
+      <div class="metric">
+        <span class="metric-label">link</span>
+        <span class="dot off" id="wsDot"></span>
+      </div>
+      <div class="metric">
+        <span class="metric-label">device</span>
+        <span class="dot off" id="deviceDot"></span>
+      </div>
+      <div class="metric">
+        <span class="metric-label">uptime</span>
+        <span id="uptimeValue">–</span>
+      </div>
+      <div class="metric">
+        <span class="metric-label">sessions</span>
+        <span id="sessionsValue">–</span>
+      </div>
+    </div>
+  </header>
+
+  <main class="layout">
+
+    <!-- LEFT COLUMN: device + status -->
+    <div class="col col-left">
+
+      <section class="panel" id="panel-devices">
+        <div class="panel-header">
+          <span class="panel-title">Device</span>
+          <button class="btn" id="btnScan" type="button">Scan</button>
+        </div>
+        <div class="panel-body">
+          <div class="device-select-row">
+            <select id="deviceSelect"></select>
+          </div>
+          <p class="device-empty" id="deviceEmpty">No devices discovered yet. Click Scan.</p>
+
+          <div class="btn-row">
+            <button class="btn btn-primary" id="btnOpen" type="button" disabled>Open</button>
+            <button class="btn btn-danger" id="btnClose" type="button" disabled>Close</button>
+          </div>
+
+          <div id="capsBlock" class="hidden">
+            <div class="field-row" style="margin-top:4px;">
+              <span class="field-label">Capabilities</span>
+              <span>
+                <span class="badge" id="badgeRx">RX</span>
+                <span class="badge" id="badgeTx">TX</span>
+                <span class="badge" id="badgeDuplex">Full-duplex</span>
+              </span>
+            </div>
+            <div class="caps-grid" id="capsGrid"></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel" id="panel-status">
+        <div class="panel-header">
+          <span class="panel-title">Status</span>
+        </div>
+        <div class="panel-body">
+          <div class="stat-grid">
+            <div class="stat">
+              <span class="stat-label">Uptime</span>
+              <span class="stat-value" id="statUptime">–</span>
+            </div>
+            <div class="stat">
+              <span class="stat-label">Sessions</span>
+              <span class="stat-value" id="statSessions">–</span>
+            </div>
+            <div class="stat">
+              <span class="stat-label">Throughput</span>
+              <span class="stat-value" id="statThroughput">–</span>
+            </div>
+            <div class="stat">
+              <span class="stat-label">RX samples</span>
+              <span class="stat-value" id="statRxSamples">–</span>
+            </div>
+            <div class="stat">
+              <span class="stat-label">Overflows</span>
+              <span class="stat-value" id="statOverflows">–</span>
+            </div>
+            <div class="stat">
+              <span class="stat-label">Dropped</span>
+              <span class="stat-value" id="statDropped">–</span>
+            </div>
+          </div>
+          <div>
+            <span class="field-label">Connected clients</span>
+            <div class="session-list" id="sessionList">
+              <p class="empty-note">No control sessions connected.</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+    </div>
+
+    <!-- CENTER COLUMN: spectrum + waterfall -->
+    <div class="col col-center">
+      <section class="panel panel-spectrum">
+        <div class="panel-header">
+          <span class="panel-title">Spectrum</span>
+          <div class="btn-row">
+            <select id="formatSelect">
+              <option value="cf32">cf32 — float32 I/Q</option>
+              <option value="ci16">ci16 — int16 I/Q</option>
+              <option value="ci8">ci8 — int8 I/Q</option>
+            </select>
+            <button class="btn btn-primary" id="btnStartRx" type="button" disabled>Start RX</button>
+            <button class="btn btn-danger" id="btnStopRx" type="button" disabled>Stop</button>
+          </div>
+        </div>
+        <div class="spectrum-toolbar">
+          <label class="field-inline">
+            <input type="checkbox" id="autoScale" checked />
+            Auto scale
+          </label>
+          <label class="field-inline">
+            Floor
+            <input type="number" id="floorDb" value="-100" step="1" />
+            dB
+          </label>
+          <label class="field-inline">
+            Ceil
+            <input type="number" id="ceilDb" value="-10" step="1" />
+            dB
+          </label>
+          <span class="field-inline" id="centerReadout">center: – MHz</span>
+          <span class="field-inline" id="spanReadout">span: – MHz</span>
+        </div>
+        <div class="canvas-wrap">
+          <canvas id="spectrumCanvas"></canvas>
+          <canvas id="waterfallCanvas"></canvas>
+          <div class="canvas-overlay hidden" id="canvasOverlay"><span id="canvasOverlayText">No device open</span></div>
+        </div>
+      </section>
+    </div>
+
+    <!-- RIGHT COLUMN: RX / TX controls -->
+    <div class="col col-right">
+
+      <section class="panel" id="panel-rx">
+        <div class="panel-header"><span class="panel-title">Receiver</span></div>
+        <div class="panel-body" id="rxControls">
+
+          <div class="field" data-control="rxFreq">
+            <div class="field-row">
+              <span class="field-label">Frequency</span>
+              <span class="field-actual" data-role="actual">–</span>
+            </div>
+            <div class="control-row">
+              <input type="number" data-role="number" step="0.000001" />
+              <span class="unit">MHz</span>
+            </div>
+            <input type="range" data-role="slider" />
+          </div>
+
+          <div class="field" data-control="rxRate">
+            <div class="field-row">
+              <span class="field-label">Sample rate</span>
+              <span class="field-actual" data-role="actual">–</span>
+            </div>
+            <div class="control-row">
+              <input type="number" data-role="number" step="0.001" />
+              <span class="unit">MHz</span>
+            </div>
+            <input type="range" data-role="slider" />
+          </div>
+
+          <div class="field" data-control="rxGain">
+            <div class="field-row">
+              <span class="field-label">Gain</span>
+              <span class="field-actual" data-role="actual">–</span>
+            </div>
+            <div class="control-row">
+              <input type="number" data-role="number" step="0.1" />
+              <span class="unit">dB</span>
+            </div>
+            <input type="range" data-role="slider" />
+          </div>
+
+          <div class="field" data-control="rxBandwidth">
+            <div class="field-row">
+              <span class="field-label">Bandwidth</span>
+              <span class="field-actual" data-role="actual">–</span>
+            </div>
+            <div class="control-row">
+              <input type="number" data-role="number" step="0.001" />
+              <span class="unit">MHz</span>
+            </div>
+            <input type="range" data-role="slider" />
+          </div>
+
+          <div class="field">
+            <div class="field-row">
+              <span class="field-label">Antenna</span>
+              <span class="field-actual" id="rxAntennaActual">–</span>
+            </div>
+            <select id="rxAntennaSelect" disabled></select>
+          </div>
+
+          <div class="field" data-control="loOffset">
+            <div class="field-row">
+              <span class="field-label">LO offset</span>
+              <span class="field-actual" data-role="actual">–</span>
+            </div>
+            <div class="control-row">
+              <input type="number" data-role="number" step="0.001" />
+              <span class="unit">MHz</span>
+            </div>
+          </div>
+
+          <div class="switch-row">
+            <span class="field-label">AGC</span>
+            <label class="switch">
+              <input type="checkbox" id="rxAgc" disabled />
+              <span class="switch-track"></span>
+            </label>
+          </div>
+          <div class="switch-row">
+            <span class="field-label">DC offset auto</span>
+            <label class="switch">
+              <input type="checkbox" id="rxDcOffset" disabled />
+              <span class="switch-track"></span>
+            </label>
+          </div>
+          <div class="switch-row">
+            <span class="field-label">IQ balance auto</span>
+            <label class="switch">
+              <input type="checkbox" id="rxIqBalance" disabled />
+              <span class="switch-track"></span>
+            </label>
+          </div>
+
+        </div>
+      </section>
+
+      <section class="panel" id="panel-tx">
+        <div class="panel-header"><span class="panel-title">Transmitter</span></div>
+        <div class="panel-body" id="txControls">
+
+          <div class="field" data-control="txFreq">
+            <div class="field-row">
+              <span class="field-label">Frequency</span>
+              <span class="field-actual" data-role="actual">–</span>
+            </div>
+            <div class="control-row">
+              <input type="number" data-role="number" step="0.000001" />
+              <span class="unit">MHz</span>
+            </div>
+            <input type="range" data-role="slider" />
+          </div>
+
+          <div class="field" data-control="txGain">
+            <div class="field-row">
+              <span class="field-label">Gain</span>
+              <span class="field-actual" data-role="actual">–</span>
+            </div>
+            <div class="control-row">
+              <input type="number" data-role="number" step="0.1" />
+              <span class="unit">dB</span>
+            </div>
+            <input type="range" data-role="slider" />
+          </div>
+
+          <div class="field">
+            <div class="field-row">
+              <span class="field-label">Antenna</span>
+              <span class="field-actual" id="txAntennaActual">–</span>
+            </div>
+            <select id="txAntennaSelect" disabled></select>
+          </div>
+
+          <p class="empty-note" id="txUnsupportedNote">This device reports no transmit capability.</p>
+        </div>
+      </section>
+
+    </div>
+
+  </main>
+</div>
+
+<div id="toast"></div>
+
+<script src="/app.js"></script>
+</body>
+</html>

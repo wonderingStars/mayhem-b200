@@ -1,0 +1,323 @@
+<!-- SPDX-License-Identifier: GPL-2.0-or-later -->
+<!-- Part of mayhem-b200.
+
+     Standalone dev harness for the panels/*.js renderers (see PANELS.md).
+     Not part of the production portal -- served by cmd/panels-harness for
+     visual verification against the fixtures in testdata/, with no C++
+     backend, no internal/portal/server, required. Deliberately plain,
+     dependency-free HTML/CSS/JS, same as the rest of this product. -->
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>mayhem-b200 panels harness</title>
+<link rel="stylesheet" href="server/static/panels/panels.css" />
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    background: var(--mp-bg);
+    color: var(--mp-text);
+    font-family: var(--mp-sans);
+    display: flex;
+    flex-direction: column;
+  }
+  header {
+    padding: 10px 16px;
+    border-bottom: 1px solid var(--mp-border);
+    background: var(--mp-panel-2);
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+  }
+  header h1 { font-size: 14px; margin: 0; }
+  header .sub { font-size: 11px; color: var(--mp-text-faint); }
+  .layout { flex: 1; display: flex; min-height: 0; }
+  nav {
+    width: 220px;
+    flex: none;
+    border-right: 1px solid var(--mp-border);
+    padding: 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    overflow-y: auto;
+  }
+  nav button {
+    appearance: none;
+    text-align: left;
+    background: var(--mp-panel);
+    border: 1px solid var(--mp-border);
+    color: var(--mp-text);
+    padding: 8px 10px;
+    border-radius: 6px;
+    font-size: 12px;
+    cursor: pointer;
+  }
+  nav button:hover { border-color: var(--mp-accent-dim); }
+  nav button.mp-btn-active { background: linear-gradient(180deg, var(--mp-accent), var(--mp-accent-dim)); color: #04140f; border-color: var(--mp-accent-dim); font-weight: 600; }
+  nav .sep { height: 1px; background: var(--mp-border); margin: 6px 0; }
+  nav .hint { font-size: 10.5px; color: var(--mp-text-faint); line-height: 1.4; }
+  .sim-row { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--mp-text-dim); margin-top: 4px; }
+  main { flex: 1; min-width: 0; display: flex; flex-direction: column; padding: 14px; gap: 8px; }
+  #status { font-size: 11px; color: var(--mp-text-faint); font-family: var(--mp-mono); }
+  #stage { flex: 1; min-height: 0; border: 1px dashed var(--mp-border); border-radius: 8px; padding: 10px; }
+  #panelHost { height: 100%; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>mayhem-b200 panels harness</h1>
+  <span class="sub">dev-only — driven entirely by internal/portal/testdata fixtures — see PANELS.md</span>
+</header>
+
+<div class="layout">
+  <nav>
+    <button data-fixture="table" data-kind="table">table</button>
+    <!-- The C++ backend's own generic table shape (string columns, positional
+         rows, no key/timestamp), which every src/remote/provider_*.cpp
+         publishing PanelKind::Table actually emits. Cells here are ones the
+         AIS decoder produced in tests/test_provider_ais_ble.cpp. Kept as a
+         separate button because it is a different shape, not different data:
+         the table panel has to draw both. -->
+    <button data-fixture="table_backend" data-kind="table">table (C++ backend shape)</button>
+    <button data-fixture="spectrum_active" data-kind="spectrum">spectrum (active)</button>
+    <button data-fixture="spectrum_idle" data-kind="spectrum">spectrum (idle)</button>
+    <button data-fixture="receiver" data-kind="receiver">receiver</button>
+    <button data-fixture="console" data-kind="console">console</button>
+    <button data-fixture="map" data-kind="map">map</button>
+    <button data-fixture="adsb" data-kind="adsb">adsb (live traffic)</button>
+    <button data-fixture="screen" data-kind="screen">screen (fallback card)</button>
+    <button data-fixture="table" data-kind="bogus_kind">unregistered kind →fallback</button>
+    <div class="sep"></div>
+    <label class="sim-row">
+      <input type="checkbox" id="simToggle" />
+      Simulate live updates
+    </label>
+    <p class="hint">
+      Perturbs the loaded fixture on a timer and calls render() again, to
+      exercise the diffing/highlight-fade/waterfall-scroll/autoscroll paths a
+      single static render can't show.
+    </p>
+    <p class="hint">
+      The adsb panel draws an OpenStreetMap basemap, pulling live tiles through
+      this server's /api/tiles/{z}/{x}/{y}.png route — the same one the real
+      portal serves. With no network it falls back to its own graticule, exactly
+      as it does in production.
+    </p>
+  </nav>
+
+  <main>
+    <div id="status">No panel loaded.</div>
+    <div id="stage"><div id="panelHost"></div></div>
+  </main>
+</div>
+
+<script src="server/static/panels/registry.js"></script>
+<script src="server/static/panels/table.js"></script>
+<script src="server/static/panels/spectrum.js"></script>
+<script src="server/static/panels/receiver.js"></script>
+<script src="server/static/panels/console.js"></script>
+<script src="server/static/panels/map.js"></script>
+<script src="server/static/panels/adsb.js"></script>
+<script src="server/static/panels/screen.js"></script>
+<script>
+(() => {
+  "use strict";
+
+  const host = document.getElementById("panelHost");
+  const statusEl = document.getElementById("status");
+  const simToggle = document.getElementById("simToggle");
+  const buttons = Array.from(document.querySelectorAll("nav button[data-kind]"));
+
+  let currentKind = null;
+  let currentFixture = null;
+  let currentData = null;
+  let simTimer = null;
+  let tick = 0;
+
+  // requestSeq/activeSeq guard against a slow-resolving fetch from an
+  // earlier load() (e.g. the initial boot load) clobbering a faster-
+  // resolving later one (e.g. the user clicking a different button before
+  // boot's fetch lands) -- without this, "last click wins" silently became
+  // "last network response wins", which isn't the same thing.
+  let requestSeq = 0;
+
+  function setStatus(msg) {
+    statusEl.textContent = `${new Date().toLocaleTimeString()} — ${msg}`;
+  }
+
+  function renderNow() {
+    if (!currentKind || !currentData) return;
+    window.MayhemPanels.renderPanel(currentKind, host, currentData);
+  }
+
+  async function load(fixture, kind) {
+    const seq = ++requestSeq;
+    buttons.forEach((b) => b.classList.toggle(
+      "mp-btn-active", b.dataset.fixture === fixture && b.dataset.kind === kind));
+    const res = await fetch(`testdata/${fixture}.json`);
+    if (seq !== requestSeq) return; // superseded by a later load() while this fetch was in flight
+    if (!res.ok) {
+      setStatus(`failed to load testdata/${fixture}.json: ${res.status}`);
+      return;
+    }
+    const data = await res.json();
+    if (seq !== requestSeq) return; // also re-check after the second await
+    currentData = data;
+    currentKind = kind;
+    currentFixture = fixture;
+    tick = 0;
+    renderNow();
+    setStatus(`loaded testdata/${fixture}.json as panel_kind "${kind}" (registered kinds: ${window.MayhemPanels.kinds().join(", ")})`);
+  }
+
+  buttons.forEach((b) => {
+    b.addEventListener("click", () => load(b.dataset.fixture, b.dataset.kind));
+  });
+
+  // --- live-update simulation ---------------------------------------------
+  //
+  // Deliberately data-shape-preserving perturbations only: every field this
+  // touches is one the real backend would also be expected to change tick to
+  // tick. Nothing here invents new panel behaviour -- it just re-fires
+  // render() with slightly different numbers so the parts of each panel that
+  // only show up across multiple renders (diffing, flash-fade, autoscroll,
+  // waterfall scroll) are actually visible.
+
+  const NEW_ICAOS = ["1A2B3C", "77CAFE", "F00D42", "9E8D7C", "554433"];
+  const CALLSIGNS = ["SWA412", "VIR9", "KLM801", "QTR029", "THY7Q"];
+  const CONSOLE_MESSAGES = [
+    "POCSAG512 addr=4471002 func=1 numeric 911",
+    "sync acquired",
+    "POCSAG1200 addr=9981234 func=3 ALPHA Unit 4 respond",
+    "warn low signal, squelch marginal",
+    "POCSAG512 addr=1122334 func=0 numeric 187",
+  ];
+
+  function simulateTable() {
+    const rows = currentData.rows || [];
+    const now = Date.now();
+    // Bump one existing row (shows the subtler "updated" flash + age reset).
+    if (rows.length > 0) {
+      const idx = tick % rows.length;
+      rows[idx].updated_at_ms = now;
+      if (rows[idx].cells.msgs) {
+        const n = parseInt(String(rows[idx].cells.msgs).replace(/,/g, ""), 10) || 0;
+        rows[idx].cells.msgs = (n + 1).toLocaleString();
+      }
+    }
+    // Occasionally add a brand-new row (shows the "new" flash) and cap length.
+    if (tick % 3 === 0) {
+      const icao = NEW_ICAOS[(tick / 3) % NEW_ICAOS.length];
+      rows.unshift({
+        key: icao + "-" + tick,
+        updated_at_ms: now,
+        cells: {
+          icao, callsign: CALLSIGNS[tick % CALLSIGNS.length],
+          alt: (10000 + (tick * 137) % 30000).toLocaleString(),
+          speed: String(200 + (tick * 7) % 250), track: String((tick * 23) % 360),
+          msgs: "1", info: "New contact",
+        },
+      });
+      if (rows.length > 12) rows.pop();
+    }
+    currentData.rows = rows;
+    currentData.row_count = rows.length;
+  }
+
+  // The backend shape carries no per-row key or timestamp, so there is
+  // nothing to bump but the cells themselves: rename a vessel and push a
+  // newly heard one onto the front, which is exactly what a RecentEntries
+  // list does on the device.
+  function simulateBackendTable() {
+    const rows = currentData.rows || [];
+    if (rows.length > 0) rows[tick % rows.length][1] = "HEARD " + tick;
+    if (tick % 3 === 0) {
+      rows.unshift([String(200000000 + tick).padStart(9, "0"), ""]);
+      if (rows.length > 12) rows.pop();
+    }
+    currentData.rows = rows;
+  }
+
+  function simulateSpectrum() {
+    if (currentData.type !== "spectrum" || !currentData.bins_db) return;
+    currentData.bins_db = currentData.bins_db.map((v) => v + (Math.random() - 0.5) * 4);
+    currentData.timestamp_ms = Date.now();
+  }
+
+  function simulateReceiver() {
+    const range = (currentData.level_max_db - currentData.level_min_db) || 100;
+    currentData.level_db = currentData.level_min_db + Math.random() * range * 0.6 + range * 0.2;
+    currentData.squelch_open = currentData.level_db > (currentData.level_min_db + range * 0.5);
+  }
+
+  function simulateConsole() {
+    if (tick % 2 !== 0) return;
+    const lines = currentData.lines || [];
+    const nextSeq = (lines.length ? lines[lines.length - 1].seq : 0) + 1;
+    lines.push({ seq: nextSeq, ts_ms: Date.now(), text: CONSOLE_MESSAGES[tick % CONSOLE_MESSAGES.length] });
+    currentData.lines = lines;
+  }
+
+  function simulateMap() {
+    (currentData.markers || []).forEach((m, i) => {
+      m.lat += Math.sin(tick / 5 + i) * 0.0006;
+      m.lon += Math.cos(tick / 5 + i) * 0.0006;
+      if (Number.isFinite(m.heading)) m.heading = (m.heading + 2) % 360;
+    });
+  }
+
+  // Flies each aircraft along its own track so trails actually accumulate,
+  // and advances the frame counters so the panel's msg/s readout is exercised
+  // rather than sitting at zero.
+  function simulateAdsb() {
+    const list = currentData.aircraft || [];
+    list.forEach((a, i) => {
+      if (a.has_pos === false) return;
+      const kt = Number(a.speed_kt) || 0;
+      const hdg = Number(a.heading_deg) || 0;
+      const degPerTick = (kt / 3600) / 60; // ~1 simulated second per tick
+      const rad = hdg * Math.PI / 180;
+      a.lat += Math.cos(rad) * degPerTick;
+      a.lon += Math.sin(rad) * degPerTick / (Math.cos(a.lat * Math.PI / 180) || 1);
+      a.heading_deg = (hdg + Math.sin(tick / 7 + i) * 1.5 + 360) % 360;
+      if (!a.on_ground) {
+        a.altitude_ft = Math.max(0, Number(a.altitude_ft || 0) + Math.sin(tick / 9 + i) * 120);
+      }
+      a.messages = (Number(a.messages) || 0) + 1 + (i % 3);
+      a.age_s = 0;
+    });
+    currentData.stats = currentData.stats || {};
+    currentData.stats.frames_accepted = (Number(currentData.stats.frames_accepted) || 0) + 13;
+    currentData.stats.frames_seen = (Number(currentData.stats.frames_seen) || 0) + 61;
+  }
+
+  function simulateTick() {
+    tick++;
+    if (currentFixture === "table") simulateTable();
+    else if (currentFixture === "table_backend") simulateBackendTable();
+    else if (currentFixture === "spectrum_active") simulateSpectrum();
+    else if (currentFixture === "receiver") simulateReceiver();
+    else if (currentFixture === "console") simulateConsole();
+    else if (currentFixture === "map") simulateMap();
+    else if (currentFixture === "adsb") simulateAdsb();
+    renderNow();
+    setStatus(`simulated tick ${tick} for "${currentFixture}"`);
+  }
+
+  simToggle.addEventListener("change", () => {
+    clearInterval(simTimer);
+    if (simToggle.checked) {
+      simTimer = setInterval(simulateTick, 900);
+    }
+  });
+
+  load("table", "table");
+})();
+</script>
+</body>
+</html>

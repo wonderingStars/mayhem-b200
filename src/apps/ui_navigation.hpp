@@ -47,6 +47,16 @@ class NavigationView : public View {
     size_t depth() const { return stack_.size(); }
     bool is_root() const { return stack_.size() <= 1; }
 
+    /* The view `i` levels below the top (0 == top()), or nullptr past the
+     * bottom of the stack. Read-only stack access exists for the web portal's
+     * panel providers: they are handed nav->top(), but an app's data usually
+     * lives on the view it pushed FIRST (e.g. ADS-B's aircraft tracker lives
+     * on AdsbRxView, which is still on the stack underneath the per-aircraft
+     * details page). Without this they would have to go blank whenever the
+     * local operator drills into a sub-view. Ownership stays with the stack;
+     * the returned pointer is only valid until the next service(). */
+    View* at_depth(size_t i) const;
+
     std::string current_title() const;
 
     /* Fired after the stack changes, so the status bar can refresh. */

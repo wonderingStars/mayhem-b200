@@ -583,6 +583,9 @@ class ErtView : public ui::View {
     void on_frame_sync() override;
     void set_parent_rect(const ui::Rect new_parent_rect) override;
 
+    /* Read-only view of the meter list, for src/remote/provider_ert.cpp. */
+    const ert::RecentEntries& entries() const { return recent_; }
+
    private:
     static constexpr ui::Dim header_height = 32;
 

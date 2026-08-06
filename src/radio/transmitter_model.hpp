@@ -38,7 +38,7 @@
 #include "../dsp/demod.hpp"
 #include "../dsp/fir.hpp"
 #include "../dsp/modulate.hpp"
-#include "usrp_radio.hpp"
+#include "radio_device.hpp"
 
 #include <atomic>
 #include <cstdint>
@@ -86,7 +86,7 @@ class TransmitterModel {
      * so that unit magnitude is full output. Called on the DSP thread. */
     using IqSource = std::function<size_t(cfloat* out, size_t count)>;
 
-    explicit TransmitterModel(UsrpRadio& radio);
+    explicit TransmitterModel(RadioDevice& radio);
     ~TransmitterModel();
 
     TransmitterModel(const TransmitterModel&) = delete;
@@ -210,7 +210,7 @@ class TransmitterModel {
     void retune_if_needed();
     bool modulates_audio() const;
 
-    UsrpRadio& radio_;
+    RadioDevice& radio_;
 
     std::thread dsp_thread_;
     std::atomic<bool> running_{false};

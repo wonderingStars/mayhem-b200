@@ -459,6 +459,11 @@ class AISAppView : public ui::View {
      * the spectrum tap covers a useful slice of a 26.7 ms burst. */
     static constexpr double capture_rate_hz = 307'200.0;
 
+    /* Read-only view of the ships heard, for src/remote/provider_ais.cpp to
+     * publish to the web portal. Const by design: the portal only ever reads.
+     * Same idiom as AprsTableView::entries() (ui_aprs_rx.hpp). */
+    const AISRecentEntries& entries() const { return recent_; }
+
    private:
     void on_packet(const ais::Packet& packet);
     void on_show_list();

@@ -35,6 +35,11 @@ View* NavigationView::top() const {
     return stack_.empty() ? nullptr : stack_.back().get();
 }
 
+View* NavigationView::at_depth(size_t i) const {
+    if (i >= stack_.size()) return nullptr;
+    return stack_[stack_.size() - 1 - i].get();
+}
+
 std::string NavigationView::current_title() const {
     const View* t = top();
     return t ? t->title() : std::string{};

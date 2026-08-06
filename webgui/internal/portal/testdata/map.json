@@ -1,0 +1,11 @@
+{
+  "app_name": "ADS-B RX",
+  "markers": [
+    { "id": "A1B2C3", "lat": 51.4700, "lon": -0.4543, "label": "UAL123", "heading": 272, "kind": "aircraft", "detail": "FL350 · 412 kt · Squawk 4102" },
+    { "id": "4A2E19", "lat": 51.5120, "lon": -0.3890, "label": "BAW29X", "heading": 88, "kind": "aircraft", "detail": "FL380 · 447 kt" },
+    { "id": "3C6528", "lat": 51.4310, "lon": -0.5210, "label": "DLH4YB", "heading": 184, "kind": "aircraft", "detail": "FL124 · 298 kt · descending" },
+    { "id": "406B90", "lat": 51.4890, "lon": -0.4120, "label": "EZY81HN", "heading": 45, "kind": "aircraft" },
+    { "id": "SHIP1", "lat": 51.5010, "lon": -0.3400, "label": "Vessel MMSI 235012", "heading": 96, "kind": "vessel", "detail": "SOG 11.2 kt" },
+    { "id": "SHIP2", "lat": 51.4550, "lon": -0.4700, "label": "Vessel MMSI 235887", "kind": "vessel", "detail": "moored" }
+  ]
+}

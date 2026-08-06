@@ -59,7 +59,7 @@ constexpr size_t kTargetOutputSamples = 8192;
 
 }  // namespace
 
-TransmitterModel::TransmitterModel(UsrpRadio& radio)
+TransmitterModel::TransmitterModel(RadioDevice& radio)
     : radio_{radio} {}
 
 TransmitterModel::~TransmitterModel() {

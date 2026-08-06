@@ -26,7 +26,7 @@
 #include "../audio/audio_out.hpp"
 #include "../dsp/demod.hpp"
 #include "../dsp/fir.hpp"
-#include "usrp_radio.hpp"
+#include "radio_device.hpp"
 
 #include <atomic>
 #include <cstdint>
@@ -69,7 +69,7 @@ class ReceiverModel {
         Narrow180k = 1,
     };
 
-    ReceiverModel(UsrpRadio& radio, audio::AudioOut& audio_out);
+    ReceiverModel(RadioDevice& radio, audio::AudioOut& audio_out);
     ~ReceiverModel();
 
     ReceiverModel(const ReceiverModel&) = delete;
@@ -173,7 +173,7 @@ class ReceiverModel {
     void rebuild_chain();
     void retune_if_needed();
 
-    UsrpRadio& radio_;
+    RadioDevice& radio_;
     audio::AudioOut& audio_;
 
     std::thread dsp_thread_;

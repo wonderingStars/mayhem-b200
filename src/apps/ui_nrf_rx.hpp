@@ -196,6 +196,12 @@ class NrfRxView : public ui::View {
     void on_hide() override;
     void on_frame_sync() override;
 
+    /* Read-only view of the decoded-packet list, for the web portal's panel
+     * provider (src/remote/provider_nrf_rx.cpp). Same idiom as
+     * AprsTableView::entries(); the app itself never calls it and nothing can
+     * mutate the list through it. */
+    const NrfRecentEntries& entries() const { return entries_; }
+
    private:
     void rebuild_front_end();
     void on_packet(const nrf::Packet& packet);

@@ -1,0 +1,8 @@
+{
+  "columns": ["MMSI", "Name/Call"],
+  "rows": [
+    ["244660320", "EVER GIVEN"],
+    ["001234567", ""],
+    ["232003859", "SEA SPIRIT"]
+  ]
+}

@@ -13,7 +13,7 @@
 #define __MB200_APP_CONTEXT_H__
 
 namespace radio {
-class UsrpRadio;
+class RadioDevice;
 class ReceiverModel;
 class TransmitterModel;
 }  // namespace radio
@@ -30,7 +30,7 @@ class NavigationView;
 namespace app {
 
 struct Context {
-    radio::UsrpRadio* radio{nullptr};
+    radio::RadioDevice* radio{nullptr};
     radio::ReceiverModel* receiver{nullptr};
     radio::TransmitterModel* transmitter{nullptr};
     audio::AudioOut* audio_out{nullptr};

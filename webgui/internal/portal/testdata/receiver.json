@@ -1,0 +1,30 @@
+{
+  "app_name": "Narrowband FM Audio",
+  "mode": "NFM",
+  "mode_detail": "11k",
+  "frequency_hz": 446006250,
+  "frequency_step_hz": 25000,
+  "gain_db": 32,
+  "gain_min_db": 0,
+  "gain_max_db": 60,
+  "gain_step_db": 1,
+  "squelch": 24,
+  "squelch_min": 0,
+  "squelch_max": 99,
+  "volume": 60,
+  "volume_min": 0,
+  "volume_max": 99,
+  "level_db": -46.5,
+  "level_min_db": -100,
+  "level_max_db": 0,
+  "squelch_open": true,
+  "agc": true,
+  "channel_bandwidth_hz": 11000,
+  "controls": {
+    "frequency": { "endpoint": "/api/receiver/frequency", "body_key": "hz" },
+    "gain": { "endpoint": "/api/receiver/gain", "body_key": "db" },
+    "squelch": { "endpoint": "/api/receiver/squelch", "body_key": "level" },
+    "volume": { "endpoint": "/api/receiver/volume", "body_key": "level" },
+    "agc": { "endpoint": "/api/receiver/agc", "body_key": "on" }
+  }
+}

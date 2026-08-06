@@ -42,27 +42,8 @@ Range from_meta(const uhd::meta_range_t& r) {
 
 }  // namespace
 
-double Range::clamp(double v) const {
-    if (max <= min) return v;
-    return std::min(std::max(v, min), max);
-}
-
-std::string DeviceInfo::label() const {
-    std::string s = product.empty() ? type : product;
-    if (s.empty()) s = "USRP";
-    if (!serial.empty()) s += " " + serial;
-    return s;
-}
-
-void StreamStats::reset() {
-    rx_samples.store(0);
-    tx_samples.store(0);
-    overflows.store(0);
-    underflows.store(0);
-    rx_dropped.store(0);
-    timeouts.store(0);
-    errors.store(0);
-}
+/* Range::clamp, DeviceInfo::label and StreamStats::reset now live in
+ * radio_device.cpp — they are shared by every backend, not UHD-specific. */
 
 DeviceCaps default_b200_caps() {
     /* Published B200 figures, used only when nothing is connected so the UI has

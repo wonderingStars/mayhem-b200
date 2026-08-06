@@ -372,6 +372,11 @@ class SearchView : public ui::View {
     void on_hide() override;
     void on_frame_sync() override;
 
+    /* Read-only view of the results list, for the web portal's panel provider
+     * (src/remote/provider_search.cpp). Same idiom as AprsTableView::entries();
+     * the app itself never calls it and nothing can mutate the list through it. */
+    const SearchRecentEntries& entries() const { return recent_; }
+
    private:
     void on_range_changed();
     void process_spectrum();
