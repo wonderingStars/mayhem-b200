@@ -35,7 +35,7 @@ layout, drawn to a host framebuffer.
 
 ---
 
-## Download (Windows)
+## Download
 
 **[Download the latest Windows build →](https://github.com/wonderingStars/mayhem-b200/releases/latest)**
 
@@ -118,11 +118,13 @@ That makes the concept roughly:
 
 **Two things have to happen before the PCB is the interesting problem:**
 
-1. **A Linux port.** Today the display is Win32/GDI and the audio is WinMM. The
-   platform-specific code is contained to three files — `src/ui/window.cpp`,
-   `src/audio/audio_out.cpp` and `src/audio/audio_in.cpp` — out of ~108k lines,
-   because everything above them is Mayhem's own portable UI core. This is a
-   contained job, not a rewrite, but nothing runs on an SBC until it is done.
+1. **~~A Linux port.~~ Done.** The display is X11 and the audio is ALSA on
+   Linux, Win32/GDI and WinMM on Windows, selected by CMake. It builds and
+   passes the same 2154 tests on both. The platform-specific code stayed
+   contained to three files out of ~108k lines, because everything above them
+   is Mayhem's own portable UI core. Caveat worth stating: the ALSA path has
+   not yet played audio on real hardware — it was developed under WSL, which
+   has no sound device — so that is the first thing to check on an SBC.
 2. **Evidence that people want it.** A carrier board costs money and somebody's
    evenings. Before that, the same machine can be built from off-the-shelf
    parts and adapters — ugly, but it proves the idea and it costs the project
@@ -142,9 +144,13 @@ would unblock:
   [issue](https://github.com/wonderingStars/mayhem-b200/issues) — "this worked",
   "this decoded nothing", "I would buy the portable one" are all useful. Star
   the repo if you want it to continue; that number is the only signal I have.
-- **A Linux port** of the three platform files above (SDL2 or DRM/KMS +
-  ALSA/PipeWire). This is the single highest-leverage contribution and it
-  unlocks everything portable.
+- **Testing the Linux build on real hardware.** It builds and passes the suite,
+  and the window and input are verified, but two things have never run outside
+  a WSL container: ALSA audio (no sound device there) and a USB SDR (no
+  passthrough). If you have a Linux box and any supported radio, that is the
+  single highest-leverage thing you can report.
+- **A DRM/KMS or Wayland display backend.** X11 works; a framebuffer-direct
+  path would suit an SBC with no desktop better.
 - **A PCB designer.** If the handheld gets past the proof stage I need someone
   who has done power paths and USB 3 layout properly. Talk to me before it is
   urgent — the enclosure and the board argue with each other early.
@@ -166,17 +172,34 @@ want to fund something specific in the meantime, say so in an issue.
 
 | | |
 |---|---|
-| Hardware | Ettus USRP B200 (B210, B200mini and B205mini should also work — every limit is read from the device, not hard-coded) |
-| OS | Windows 10/11 x64 |
-| Compiler | MSVC 2022 (Build Tools are enough) |
-| UHD | 4.x with headers and `uhd.lib` — the stock Windows installer |
+| Hardware | Ettus USRP B200 (B210, B200mini and B205mini should also work — every limit is read from the device, not hard-coded). Any other SDR via [sdrlink](https://github.com/wonderingStars/sdrlink-beta) — see `--driver=sdrlink` below |
+| OS | Windows 10/11 x64, or Linux x64 |
+| Compiler | MSVC 2022 (Build Tools are enough), or GCC 12+ |
+| UHD | 4.x with headers — the stock Windows installer, or `libuhd-dev` |
 | Boost | headers only; UHD's public headers include `<boost/format.hpp>` |
 | CMake | 3.20+ |
+| Linux only | X11 (`libx11-dev`) and ALSA (`libasound2-dev`) |
 
-No other dependencies. The window is plain Win32/GDI and the audio is WinMM, so
-there is no SDL, Qt or FFTW to install.
+No other dependencies. The window is plain Win32/GDI on Windows and plain X11
+on Linux; audio is WinMM and ALSA respectively. There is no SDL, Qt or FFTW to
+install.
 
 ## Building
+
+### Linux
+
+```bash
+sudo apt install build-essential cmake libx11-dev libasound2-dev libuhd-dev
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build -j$(nproc)
+./build/tests/mb200_tests
+```
+
+Builds and passes the full suite on Linux. Note that the resulting binary is
+tied to the glibc of the machine that built it, so build on the machine you
+intend to run on rather than copying the binary between distributions.
+
+### Windows
 
 ```bash
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
@@ -209,10 +232,19 @@ build\mayhem-b200.exe
 
 | Option | Meaning |
 |---|---|
-| `--args=<uhd args>` | Pick a device, e.g. `--args=type=b200,serial=31C9297` |
+| `--driver=<uhd\|sdrlink>` | Radio backend. `uhd` talks to a local USRP; `sdrlink` talks to an [sdrlink](https://github.com/wonderingStars/sdrlink-beta) server, which is how you use any non-USRP radio |
+| `--args=<backend args>` | For `uhd`, a device address such as `type=b200,serial=31C9297`. For `sdrlink`, `host[:port]`, optionally `/` and remote device args |
 | `--scale=<1..6>` | Window magnification (default 2) |
-| `--list` | List attached USRPs and exit |
+| `--portal[=port]` | Serve the browser UI and JSON API (default 8090) |
+| `--list` | List attached USRPs and exit (uhd only) |
 | `--help` | Usage |
+
+To drive a radio that is not a USRP — RTL-SDR, HackRF, Airspy, LimeSDR,
+PlutoSDR — run an sdrlink server beside it and point this at it:
+
+```bash
+mayhem-b200 --driver=sdrlink --args=127.0.0.1:5960/driver=rtlsdr
+```
 
 The app starts and stays usable with no radio attached — it shows `no dev` in
 the status bar, and **Radio setup → Reconnect** picks the device up when you
