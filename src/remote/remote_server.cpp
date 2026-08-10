@@ -12,6 +12,14 @@
 
 #include "../apps/app_registry.hpp"
 
+#if !defined(_WIN32)
+#include <cerrno>
+#include <netinet/in.h>
+#include <sys/socket.h>
+#include <sys/time.h>
+#include <unistd.h>
+#endif
+
 #include <cctype>
 #include <cstdlib>
 #include <sstream>
@@ -25,6 +33,16 @@ constexpr const char* kJson = "application/json; charset=utf-8";
 constexpr size_t kMaxHeaderBytes = 16 * 1024;
 constexpr size_t kMaxBodyBytes = 1 * 1024 * 1024;
 constexpr int kRecvTimeoutMs = 5000;
+
+/* --- Platform socket compatibility -------------------------------------------
+ *
+ * Everything below this block — HTTP parsing, routing, the accept loop — is
+ * platform-neutral. Only these few primitives differ between Winsock and BSD
+ * sockets, so they are wrapped once here rather than #ifdef-ed at every call
+ * site, which keeps the request path reading identically on both.
+ */
+
+#if defined(_WIN32)
 
 /* WSAStartup/WSACleanup are refcounted by Winsock itself; a function-local
  * static keeps the process to exactly one pair regardless of how many
@@ -53,6 +71,97 @@ WsaInit& wsa_init() {
     return w;
 }
 
+using socklen_type = int;
+/* The int-returning calls (bind/listen) report failure as -1 on both
+ * platforms; SOCKET_ERROR is just Winsock's spelling of it. */
+constexpr int kSocketError = SOCKET_ERROR;
+
+bool socket_startup() { return wsa_init().ok(); }
+
+std::string last_socket_error_suffix() {
+    return " (WSA error " + std::to_string(WSAGetLastError()) + ")";
+}
+
+void set_reuse_addr(socket_t s) {
+    const BOOL reuse = TRUE;
+    setsockopt(s, SOL_SOCKET, SO_REUSEADDR, reinterpret_cast<const char*>(&reuse), sizeof(reuse));
+}
+
+void set_recv_timeout(socket_t s, int timeout_ms) {
+    const DWORD tv = static_cast<DWORD>(timeout_ms);
+    setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, reinterpret_cast<const char*>(&tv), sizeof(tv));
+}
+
+long socket_send(socket_t s, const char* data, size_t len) {
+    return ::send(s, data, static_cast<int>(len), 0);
+}
+
+long socket_recv(socket_t s, char* data, size_t len) {
+    return ::recv(s, data, static_cast<int>(len), 0);
+}
+
+void socket_finish_and_close(socket_t s) {
+    shutdown(s, SD_SEND);
+    closesocket(s);
+}
+
+/* closesocket() on a listening socket unblocks a concurrent accept(), so
+ * stopping the server needs nothing more than closing it. */
+void listener_close(socket_t s) { closesocket(s); }
+
+#else
+
+using socklen_type = socklen_t;
+constexpr int kSocketError = -1;
+
+/* Nothing to initialise: BSD sockets need no per-process startup call. */
+bool socket_startup() { return true; }
+
+std::string last_socket_error_suffix() {
+    return " (errno " + std::to_string(errno) + ")";
+}
+
+void set_reuse_addr(socket_t s) {
+    const int reuse = 1;
+    setsockopt(s, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse));
+}
+
+void set_recv_timeout(socket_t s, int timeout_ms) {
+    /* SO_RCVTIMEO takes a struct timeval here, not the millisecond DWORD
+     * Winsock takes. Passing the Windows shape would set a garbage timeout. */
+    timeval tv{};
+    tv.tv_sec = timeout_ms / 1000;
+    tv.tv_usec = (timeout_ms % 1000) * 1000;
+    setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+}
+
+long socket_send(socket_t s, const char* data, size_t len) {
+    /* MSG_NOSIGNAL: a client that closes the connection before reading the
+     * response must make send() fail with EPIPE, not raise SIGPIPE — whose
+     * default disposition would terminate the whole application. */
+    return static_cast<long>(::send(s, data, len, MSG_NOSIGNAL));
+}
+
+long socket_recv(socket_t s, char* data, size_t len) {
+    return static_cast<long>(::recv(s, data, len, 0));
+}
+
+void socket_finish_and_close(socket_t s) {
+    shutdown(s, SHUT_WR);
+    ::close(s);
+}
+
+/* Unlike closesocket(), a bare close() does NOT wake a thread already blocked
+ * in accept() on this socket — the accept stays parked and RemoteServer::stop()
+ * would hang forever joining it. shutdown() does wake it (accept then fails
+ * with EINVAL), so it has to come first. */
+void listener_close(socket_t s) {
+    shutdown(s, SHUT_RDWR);
+    ::close(s);
+}
+
+#endif
+
 const char* status_text(int status) {
     switch (status) {
         case 200: return "OK";
@@ -70,7 +179,7 @@ struct HttpRequest {
     std::string body;
 };
 
-void send_response(SOCKET s, int status, const char* content_type, const std::string& body) {
+void send_response(socket_t s, int status, const char* content_type, const std::string& body) {
     std::ostringstream out;
     out << "HTTP/1.1 " << status << ' ' << status_text(status) << "\r\n"
         << "Content-Type: " << content_type << "\r\n"
@@ -86,14 +195,14 @@ void send_response(SOCKET s, int status, const char* content_type, const std::st
 
     size_t sent = 0;
     while (sent < text.size()) {
-        const int n = send(s, text.data() + static_cast<ptrdiff_t>(sent),
-                           static_cast<int>(text.size() - sent), 0);
+        const long n = socket_send(s, text.data() + static_cast<ptrdiff_t>(sent),
+                                   text.size() - sent);
         if (n <= 0) break;
         sent += static_cast<size_t>(n);
     }
 }
 
-void send_json_error(SOCKET s, int status, const std::string& message) {
+void send_json_error(socket_t s, int status, const std::string& message) {
     JsonValue v = JsonValue::object();
     v.set("error", JsonValue::string(message));
     send_response(s, status, kJson, v.dump());
@@ -103,13 +212,13 @@ void send_json_error(SOCKET s, int status, const std::string& message) {
  * Content-Length is consulted) and body. Returns false on a malformed
  * request, an oversized header/body, a client that never sends a full
  * request, or a socket error/timeout. */
-bool read_request(SOCKET s, HttpRequest& out) {
+bool read_request(socket_t s, HttpRequest& out) {
     std::string buf;
     char chunk[4096];
 
     size_t header_end = std::string::npos;
     while (header_end == std::string::npos) {
-        const int n = recv(s, chunk, sizeof(chunk), 0);
+        const long n = socket_recv(s, chunk, sizeof(chunk));
         if (n <= 0) return false;
         buf.append(chunk, static_cast<size_t>(n));
         if (buf.size() > kMaxHeaderBytes) return false;
@@ -152,7 +261,7 @@ bool read_request(SOCKET s, HttpRequest& out) {
 
     out.body = std::move(leftover);
     while (out.body.size() < content_length) {
-        const int n = recv(s, chunk, sizeof(chunk), 0);
+        const long n = socket_recv(s, chunk, sizeof(chunk));
         if (n <= 0) break;
         out.body.append(chunk, static_cast<size_t>(n));
     }
@@ -182,7 +291,7 @@ std::string extract_launch_id(const std::string& path) {
     return id;
 }
 
-void route(SOCKET client, const HttpRequest& req) {
+void route(socket_t client, const HttpRequest& req) {
     auto& bridge = AppBridge::instance();
 
     if (req.method == "GET" && req.path == "/api/apps") {
@@ -218,9 +327,8 @@ void route(SOCKET client, const HttpRequest& req) {
  * AppBridge::instance(), a Meyers singleton with static storage duration, so
  * it is safe to run detached from a RemoteServer that may since have been
  * destroyed (see RemoteServer::accept_loop()). */
-void handle_connection(SOCKET client) {
-    const int timeout_ms = kRecvTimeoutMs;
-    setsockopt(client, SOL_SOCKET, SO_RCVTIMEO, reinterpret_cast<const char*>(&timeout_ms), sizeof(timeout_ms));
+void handle_connection(socket_t client) {
+    set_recv_timeout(client, kRecvTimeoutMs);
 
     HttpRequest req;
     if (read_request(client, req)) {
@@ -229,8 +337,7 @@ void handle_connection(SOCKET client) {
         send_json_error(client, 400, "bad request");
     }
 
-    shutdown(client, SD_SEND);
-    closesocket(client);
+    socket_finish_and_close(client);
 }
 
 }  // namespace
@@ -246,45 +353,43 @@ bool RemoteServer::start(uint16_t port) {
         last_error_ = "already running";
         return false;
     }
-    if (!wsa_init().ok()) {
+    if (!socket_startup()) {
         last_error_ = "WSAStartup failed";
         return false;
     }
 
     listen_socket_ = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-    if (listen_socket_ == INVALID_SOCKET) {
-        last_error_ = "socket() failed (WSA error " + std::to_string(WSAGetLastError()) + ")";
+    if (listen_socket_ == kInvalidSocket) {
+        last_error_ = "socket() failed" + last_socket_error_suffix();
         return false;
     }
 
     /* So a restart (e.g. after a crash-free process relaunch) can reuse the
      * port immediately instead of sitting in TIME_WAIT. */
-    BOOL reuse = TRUE;
-    setsockopt(listen_socket_, SOL_SOCKET, SO_REUSEADDR, reinterpret_cast<const char*>(&reuse), sizeof(reuse));
+    set_reuse_addr(listen_socket_);
 
     sockaddr_in addr{};
     addr.sin_family = AF_INET;
     addr.sin_addr.s_addr = INADDR_ANY;
     addr.sin_port = htons(port);
 
-    if (bind(listen_socket_, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) == SOCKET_ERROR) {
-        last_error_ = "bind() failed on port " + std::to_string(port) +
-                      " (WSA error " + std::to_string(WSAGetLastError()) + ")";
-        closesocket(listen_socket_);
-        listen_socket_ = INVALID_SOCKET;
+    if (bind(listen_socket_, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) == kSocketError) {
+        last_error_ = "bind() failed on port " + std::to_string(port) + last_socket_error_suffix();
+        listener_close(listen_socket_);
+        listen_socket_ = kInvalidSocket;
         return false;
     }
 
-    if (listen(listen_socket_, SOMAXCONN) == SOCKET_ERROR) {
-        last_error_ = "listen() failed (WSA error " + std::to_string(WSAGetLastError()) + ")";
-        closesocket(listen_socket_);
-        listen_socket_ = INVALID_SOCKET;
+    if (listen(listen_socket_, SOMAXCONN) == kSocketError) {
+        last_error_ = "listen() failed" + last_socket_error_suffix();
+        listener_close(listen_socket_);
+        listen_socket_ = kInvalidSocket;
         return false;
     }
 
     /* port 0 asks the OS to pick; find out what it picked. */
     sockaddr_in bound{};
-    int bound_len = sizeof(bound);
+    socklen_type bound_len = sizeof(bound);
     if (getsockname(listen_socket_, reinterpret_cast<sockaddr*>(&bound), &bound_len) == 0) {
         port_ = ntohs(bound.sin_port);
     } else {
@@ -299,10 +404,10 @@ bool RemoteServer::start(uint16_t port) {
 void RemoteServer::stop() {
     if (!running_.exchange(false)) return;
 
-    if (listen_socket_ != INVALID_SOCKET) {
+    if (listen_socket_ != kInvalidSocket) {
         /* Unblocks the accept() call in accept_loop(). */
-        closesocket(listen_socket_);
-        listen_socket_ = INVALID_SOCKET;
+        listener_close(listen_socket_);
+        listen_socket_ = kInvalidSocket;
     }
     if (accept_thread_.joinable()) accept_thread_.join();
     port_ = 0;
@@ -311,9 +416,9 @@ void RemoteServer::stop() {
 void RemoteServer::accept_loop() {
     while (running_.load()) {
         sockaddr_in client_addr{};
-        int addr_len = sizeof(client_addr);
-        const SOCKET client = accept(listen_socket_, reinterpret_cast<sockaddr*>(&client_addr), &addr_len);
-        if (client == INVALID_SOCKET) {
+        socklen_type addr_len = sizeof(client_addr);
+        const socket_t client = accept(listen_socket_, reinterpret_cast<sockaddr*>(&client_addr), &addr_len);
+        if (client == kInvalidSocket) {
             /* Either a real accept() error, or stop() closed the listening
              * socket out from under us — either way there is nothing to
              * serve, so re-check running_ and either retry or exit. */

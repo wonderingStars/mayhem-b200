@@ -5,6 +5,11 @@
  * SPDX-License-Identifier: GPL-2.0-or-later
  */
 
+/* Windows implementation of audio::AudioOut. audio_out_linux.cpp is the ALSA
+ * one; CMake compiles only the file matching the target platform, and this
+ * guard keeps that true even if the source globs ever pick up both. */
+#if defined(_WIN32)
+
 #include "audio_out.hpp"
 
 #ifndef WIN32_LEAN_AND_MEAN
@@ -218,3 +223,5 @@ float AudioOut::take_peak() {
 }
 
 }  // namespace audio
+
+#endif /* _WIN32 */

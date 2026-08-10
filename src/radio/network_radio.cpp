@@ -15,6 +15,16 @@
 #endif
 #include <winsock2.h>
 #include <ws2tcpip.h>
+#else
+#include <cerrno>
+#include <fcntl.h>
+#include <netdb.h>
+#include <netinet/in.h>
+#include <netinet/tcp.h>
+#include <sys/select.h>
+#include <sys/socket.h>
+#include <sys/time.h>
+#include <unistd.h>
 #endif
 
 #include <algorithm>
@@ -462,10 +472,10 @@ uint32_t frames_dropped_between(uint32_t last_seq, uint32_t seq) {
 
 /* --- Socket implementation ---------------------------------------------------
  *
- * WinsockSocket is the only piece of this backend that touches ws2_32. A POSIX
- * port later replaces this block (and CMakeLists' ws2_32 link) with a BSD
- * sockets equivalent of the same Socket interface — nothing else in this file
- * or in NetworkRadio changes.
+ * The only part of this backend that touches the OS socket API: WinsockSocket
+ * against ws2_32 on Windows, PosixSocket against BSD sockets elsewhere. They
+ * implement the same Socket interface with the same semantics, so nothing else
+ * in this file or in NetworkRadio is platform-dependent.
  */
 
 #if defined(_WIN32)
@@ -634,11 +644,151 @@ std::unique_ptr<Socket> make_platform_socket() { return std::make_unique<Winsock
 
 #else
 
-std::unique_ptr<Socket> make_platform_socket() {
-    /* Not built yet — the Socket interface above is exactly what a POSIX BSD
-     * sockets implementation would fill in. See the header comment. */
-    return nullptr;
-}
+namespace {
+
+/* The BSD sockets counterpart of WinsockSocket above. Same interface, same
+ * connect-timeout strategy; only the spellings differ (fd instead of SOCKET,
+ * errno instead of WSAGetLastError, a timeval instead of a millisecond DWORD
+ * for SO_RCVTIMEO). No process-wide startup call is needed, so there is no
+ * equivalent of WsaInit here. */
+class PosixSocket : public Socket {
+   public:
+    PosixSocket() = default;
+    ~PosixSocket() override { close(); }
+
+    PosixSocket(const PosixSocket&) = delete;
+    PosixSocket& operator=(const PosixSocket&) = delete;
+
+    bool connect(const std::string& host, uint16_t port, int timeout_ms, std::string& error) override {
+        close();
+
+        addrinfo hints{};
+        hints.ai_family = AF_UNSPEC;
+        hints.ai_socktype = SOCK_STREAM;
+        hints.ai_protocol = IPPROTO_TCP;
+
+        addrinfo* results = nullptr;
+        const std::string port_str = std::to_string(port);
+        const int gai = getaddrinfo(host.c_str(), port_str.c_str(), &hints, &results);
+        if (gai != 0 || results == nullptr) {
+            error = "sdrlink: cannot resolve " + host + " (getaddrinfo error " + std::to_string(gai) + ")";
+            return false;
+        }
+
+        bool connected = false;
+        for (addrinfo* p = results; p != nullptr && !connected; p = p->ai_next) {
+            const int s = ::socket(p->ai_family, p->ai_socktype, p->ai_protocol);
+            if (s < 0) continue;
+
+            /* Non-blocking connect + select(), so an unreachable host fails in
+             * timeout_ms instead of the OS's own multi-minute TCP SYN retry
+             * budget — the requirement that open() never hangs. */
+            const int flags = fcntl(s, F_GETFL, 0);
+            fcntl(s, F_SETFL, (flags < 0 ? 0 : flags) | O_NONBLOCK);
+
+            const int rc = ::connect(s, p->ai_addr, p->ai_addrlen);
+            bool ok = (rc == 0);
+            if (rc < 0 && errno == EINPROGRESS) {
+                fd_set write_set;
+                fd_set err_set;
+                FD_ZERO(&write_set);
+                FD_ZERO(&err_set);
+                FD_SET(s, &write_set);
+                FD_SET(s, &err_set);
+                timeval tv{};
+                tv.tv_sec = timeout_ms / 1000;
+                tv.tv_usec = (timeout_ms % 1000) * 1000;
+
+                /* Unlike Winsock's, this select() needs the real nfds. */
+                const int sel = ::select(s + 1, nullptr, &write_set, &err_set, &tv);
+                if (sel > 0 && FD_ISSET(s, &write_set) && !FD_ISSET(s, &err_set)) {
+                    int soerr = 0;
+                    socklen_t soerr_len = sizeof(soerr);
+                    if (getsockopt(s, SOL_SOCKET, SO_ERROR, &soerr, &soerr_len) == 0 && soerr == 0) {
+                        ok = true;
+                    }
+                }
+            }
+
+            if (!ok) {
+                ::close(s);
+                continue;
+            }
+
+            if (flags >= 0) fcntl(s, F_SETFL, flags);
+            sock_ = s;
+            connected = true;
+        }
+
+        freeaddrinfo(results);
+
+        if (!connected) {
+            error = "sdrlink: could not connect to " + host + ":" + port_str;
+            return false;
+        }
+
+        /* Control traffic is one small request/reply at a time; Nagle would
+         * only add latency here, never save bandwidth worth having. */
+        const int nodelay = 1;
+        setsockopt(sock_, IPPROTO_TCP, TCP_NODELAY, &nodelay, sizeof(nodelay));
+        set_recv_timeout(timeout_ms);
+        return true;
+    }
+
+    void close() override {
+        if (sock_ >= 0) {
+            ::close(sock_);
+            sock_ = -1;
+        }
+    }
+
+    bool is_open() const override { return sock_ >= 0; }
+
+    bool send_all(const void* data, size_t len) override {
+        if (sock_ < 0) return false;
+        const char* p = static_cast<const char*>(data);
+        size_t sent = 0;
+        while (sent < len) {
+            /* MSG_NOSIGNAL: an sdrlink server that goes away mid-send must
+             * make send() fail with EPIPE, not raise SIGPIPE — whose default
+             * disposition would terminate the whole application. */
+            const ssize_t n = ::send(sock_, p + sent, len - sent, MSG_NOSIGNAL);
+            if (n <= 0) {
+                if (n < 0 && errno == EINTR) continue;
+                return false;
+            }
+            sent += static_cast<size_t>(n);
+        }
+        return true;
+    }
+
+    long recv_some(void* data, size_t len) override {
+        if (sock_ < 0) return kError;
+        const ssize_t n = ::recv(sock_, data, len, 0);
+        if (n > 0) return static_cast<long>(n);
+        if (n == 0) return kClosed;
+        if (errno == EAGAIN || errno == EWOULDBLOCK) return kTimeout;
+        if (errno == EINTR) return kTimeout; /* caller re-checks its stop flag and retries */
+        return kError;
+    }
+
+    void set_recv_timeout(int timeout_ms) override {
+        if (sock_ < 0) return;
+        /* SO_RCVTIMEO takes a struct timeval here, not Winsock's millisecond
+         * DWORD; an expiry surfaces as EAGAIN, mapped to kTimeout above. */
+        timeval tv{};
+        tv.tv_sec = timeout_ms / 1000;
+        tv.tv_usec = (timeout_ms % 1000) * 1000;
+        setsockopt(sock_, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+    }
+
+   private:
+    int sock_{-1};
+};
+
+}  // namespace
+
+std::unique_ptr<Socket> make_platform_socket() { return std::make_unique<PosixSocket>(); }
 
 #endif
 

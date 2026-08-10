@@ -9,6 +9,11 @@
  * any later version. See LICENSE.GPL-2.0-or-later.
  */
 
+/* Windows implementation of host::Window. window_linux.cpp is the X11 one;
+ * CMake compiles only the file matching the target platform, and this guard
+ * keeps that true even if the source globs ever pick up both. */
+#if defined(_WIN32)
+
 #include "window.hpp"
 
 #include "display.hpp"
@@ -372,3 +377,5 @@ void Window::set_title(const std::string& title) {
 }
 
 }  // namespace host
+
+#endif /* _WIN32 */

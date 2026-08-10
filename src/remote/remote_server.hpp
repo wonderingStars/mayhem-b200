@@ -1,8 +1,10 @@
 /*
  * mayhem-b200 — the web portal's HTTP server.
  *
- * A small, dependency-free HTTP/1.1 server on raw Winsock (the project
- * already links ws2_32 for src/radio/network_radio.cpp's sdrlink client).
+ * A small, dependency-free HTTP/1.1 server on raw sockets — Winsock on
+ * Windows (the project already links ws2_32 for src/radio/network_radio.cpp's
+ * sdrlink client), BSD sockets elsewhere; see the compatibility block at the
+ * top of remote_server.cpp for the handful of primitives that differ.
  * Every request is served on its own short-lived thread and answered with
  * "Connection: close" — there is no keep-alive and no pipelining — which
  * keeps the parser in remote_server.cpp small at the cost of a new TCP
@@ -30,6 +32,8 @@
 #ifndef __MB200_REMOTE_SERVER_H__
 #define __MB200_REMOTE_SERVER_H__
 
+#if defined(_WIN32)
+
 /* WIN32_LEAN_AND_MEAN (a project-wide compile definition, see CMakeLists.txt
  * and scripts/checkfile.cmd) keeps <windows.h> from pulling in the original
  * <winsock.h>, so it does not matter whether this header is included before
@@ -46,12 +50,29 @@
 #undef RGB
 #endif
 
+#endif /* _WIN32 */
+
 #include <atomic>
 #include <cstdint>
 #include <string>
 #include <thread>
 
 namespace remote {
+
+/* A listening socket handle. Winsock's SOCKET is an unsigned handle with its
+ * own INVALID_SOCKET sentinel; a BSD socket is a plain file descriptor with -1.
+ * Naming the difference here keeps the member below, and the accept loop in
+ * remote_server.cpp, written once for both. No POSIX socket header is included
+ * from this header — remote_server.cpp is the only place that calls into the
+ * socket API, and pulling <sys/socket.h> into every translation unit that
+ * includes this one would be gratuitous. */
+#if defined(_WIN32)
+using socket_t = SOCKET;
+inline constexpr socket_t kInvalidSocket = INVALID_SOCKET;
+#else
+using socket_t = int;
+inline constexpr socket_t kInvalidSocket = -1;
+#endif
 
 class RemoteServer {
    public:
@@ -87,7 +108,7 @@ class RemoteServer {
     void accept_loop();
 
     std::atomic<bool> running_{false};
-    SOCKET listen_socket_{INVALID_SOCKET};
+    socket_t listen_socket_{kInvalidSocket};
     uint16_t port_{0};
     std::string last_error_{};
     std::thread accept_thread_{};

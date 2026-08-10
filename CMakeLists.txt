@@ -87,6 +87,21 @@ file(GLOB MB200_AUDIO_SOURCES  CONFIGURE_DEPENDS src/audio/*.cpp)
 file(GLOB MB200_APPS_SOURCES   CONFIGURE_DEPENDS src/apps/*.cpp)
 file(GLOB MB200_REMOTE_SOURCES CONFIGURE_DEPENDS src/remote/*.cpp)
 
+# The window and audio device layers have one implementation per platform:
+# window.cpp / audio_out.cpp / audio_in.cpp are Win32, the matching *_linux.cpp
+# are X11 and ALSA. Only one of each may be compiled, so the globs above have
+# the wrong platform's file removed here. (Each file also carries its own
+# #if defined(_WIN32) guard, so picking up both would still link, but the
+# non-Windows build would then need the X11 headers on Windows.)
+if(WIN32)
+    list(FILTER MB200_UI_SOURCES    EXCLUDE REGEX "_linux\\.cpp$")
+    list(FILTER MB200_AUDIO_SOURCES EXCLUDE REGEX "_linux\\.cpp$")
+else()
+    list(REMOVE_ITEM MB200_UI_SOURCES    "${CMAKE_CURRENT_SOURCE_DIR}/src/ui/window.cpp")
+    list(REMOVE_ITEM MB200_AUDIO_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/audio/audio_out.cpp")
+    list(REMOVE_ITEM MB200_AUDIO_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/audio/audio_in.cpp")
+endif()
+
 # OBJECT, not STATIC: apps self-register through a file-scope Registrar and are
 # reached only through the registry, never named directly. A static library's
 # linker would discard those objects as unreferenced and the apps would silently
@@ -119,6 +134,15 @@ if(WIN32)
     # gdi32/user32: the window and framebuffer blit. winmm: waveOut/waveIn audio.
     # ws2_32: Winsock, for NetworkRadio's sdrlink client (src/radio/network_radio.cpp).
     target_link_libraries(mb200 PUBLIC gdi32 user32 winmm ws2_32)
+else()
+    # The Linux equivalents of that list. X11: the window and framebuffer blit
+    # (src/ui/window_linux.cpp). ALSA: audio in/out (src/audio/*_linux.cpp).
+    # Sockets need no library here — they are in libc. Threads does what the
+    # Windows CRT provides implicitly.
+    find_package(X11 REQUIRED)
+    find_package(ALSA REQUIRED)
+    find_package(Threads REQUIRED)
+    target_link_libraries(mb200 PUBLIC X11::X11 ALSA::ALSA Threads::Threads)
 endif()
 
 # ---------------------------------------------------------------------------

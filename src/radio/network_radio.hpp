@@ -93,7 +93,8 @@ class Socket {
 
 using SocketFactory = std::function<std::unique_ptr<Socket>()>;
 
-/* The Winsock implementation. Safe to call repeatedly (WSAStartup is
+/* The OS socket implementation for this platform: Winsock on Windows, BSD
+ * sockets elsewhere. Safe to call repeatedly (on Windows WSAStartup is
  * refcounted internally). */
 std::unique_ptr<Socket> make_platform_socket();
 

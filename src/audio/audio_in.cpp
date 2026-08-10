@@ -5,6 +5,11 @@
  * SPDX-License-Identifier: GPL-2.0-or-later
  */
 
+/* Windows implementation of audio::AudioIn. audio_in_linux.cpp is the ALSA
+ * one; CMake compiles only the file matching the target platform, and this
+ * guard keeps that true even if the source globs ever pick up both. */
+#if defined(_WIN32)
+
 #include "audio_in.hpp"
 
 #ifndef WIN32_LEAN_AND_MEAN
@@ -182,3 +187,5 @@ uint32_t AudioIn::overruns() const {
 }
 
 }  // namespace audio
+
+#endif /* _WIN32 */
