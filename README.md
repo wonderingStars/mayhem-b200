@@ -195,9 +195,14 @@ cmake --build build -j$(nproc)
 ./build/tests/mb200_tests
 ```
 
-Builds and passes the full suite on Linux. Note that the resulting binary is
-tied to the glibc of the machine that built it, so build on the machine you
-intend to run on rather than copying the binary between distributions.
+Builds and passes the full suite on Linux.
+
+A prebuilt Linux x64 binary is attached to the
+[release](https://github.com/wonderingStars/mayhem-b200/releases), but it
+needs **glibc 2.43 (Ubuntu 26.04 and nothing older)**, because that is the
+only Linux available to build it on. On 24.04 LTS or anything else, build from
+source with the two commands above — the binary is tied to the glibc of the
+machine that built it, so copying it between distributions does not work.
 
 ### Windows
 
