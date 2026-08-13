@@ -19,6 +19,8 @@
 
 #include "test_main.hpp"
 
+#include <process.h> /* _getpid: see kStem */
+
 #include "file_path.hpp"
 #include "freqman_db.hpp"
 #include "string_format.hpp"
@@ -58,8 +60,14 @@ void swap_entries(core::FreqmanDB& db, size_t i, size_t j) {
 }
 
 /* A list name the tests own; wiped before and after so a crashed run can't
- * poison the next. */
-constexpr const char* kStem = "__mb200_freqman_app_test";
+ * poison the next. PID in the stem because this list lives in the REAL shared
+ * FREQMAN directory (<Documents>/mayhem-b200/FREQMAN) -- a fixed stem is the
+ * same file for every concurrently-running suite (one per git worktree is
+ * normal here), and each ScopedList deletes it, so one process wiped
+ * another's live fixture mid-test. Observed 2026-08-13 in a two-process
+ * verification run: both suites failed in these tests simultaneously with
+ * each seeing the other's entry counts. */
+static const std::string kStem = "__mb200_freqman_app_test_" + std::to_string(_getpid());
 
 struct ScopedList {
     ScopedList() { core::delete_freqman_file(kStem); }

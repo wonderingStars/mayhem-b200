@@ -65,8 +65,12 @@ namespace app {
  * (first reading now ~1 s, was 10-15 s); the sdrlink reconnect replays gain
  * in dB rather than Hz; and the USRP RX thread survives the app-switch race
  * (start-command retry across streamer generations, plus a starvation
- * watchdog that re-kicks a stream the hardware accepted but never fed). */
-constexpr const char* kVersion = "0.12.0";
+ * watchdog that re-kicks a stream the hardware accepted but never fed).
+ * 0.12.1: every test fixture is unique per process. Fixed temp names and a
+ * fixed FREQMAN stem let two concurrently-running suites (one per git
+ * worktree) delete each other's live fixtures mid-test; verified clean with
+ * two suites looping side by side, 12 rounds each. */
+constexpr const char* kVersion = "0.12.1";
 
 class AboutView : public ui::View {
    public:

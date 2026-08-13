@@ -21,6 +21,8 @@
 
 #include "test_main.hpp"
 
+#include <process.h> /* _getpid: shared-temp names must be unique PER PROCESS */
+
 #include <algorithm>
 #include <cstdint>
 #include <filesystem>
@@ -40,7 +42,10 @@ namespace {
 
 std::string make_dir(const char* name) {
     std::error_code ec;
-    auto dir = std::filesystem::temp_directory_path(ec) / "mb200_soundboard" / name;
+    /* Per-process subdir: make_dir() remove_all()s this path, so a fixed
+     * name here had one process deleting another's live fixture. */
+    auto dir = std::filesystem::temp_directory_path(ec) /
+               ("mb200_soundboard_" + std::to_string(_getpid())) / name;
     std::filesystem::remove_all(dir, ec);
     std::filesystem::create_directories(dir, ec);
     return dir.string();

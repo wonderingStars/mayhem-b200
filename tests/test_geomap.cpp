@@ -16,6 +16,8 @@
 
 #include "test_main.hpp"
 
+#include <process.h> /* _getpid: shared-temp names must be unique PER PROCESS */
+
 #include "display.hpp"
 #include "file_path.hpp"
 #include "ui_geomap.hpp"
@@ -46,7 +48,13 @@ ui::GeoMarker make_marker(float lat, float lon, uint16_t angle = ui::invalid_ang
 }
 
 std::filesystem::path temp_map_path(const char* name) {
-    return std::filesystem::temp_directory_path() / name;
+    /* PID in the name: this path lives in the SHARED system temp dir, and a
+     * fixed name is the same file in every concurrently-running test process
+     * (one per git worktree is normal here). Concurrent suites then delete or
+     * overwrite each other's fixtures mid-test -- observed 2026-08-13 as
+     * intermittent read-back failures with the binary md5-pinned. */
+    return std::filesystem::temp_directory_path() /
+           (std::to_string(_getpid()) + "_" + name);
 }
 
 void write_map_file(const std::filesystem::path& path,

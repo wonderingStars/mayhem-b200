@@ -12,6 +12,8 @@
 
 #include "test_main.hpp"
 
+#include <process.h> /* _getpid: shared-temp names must be unique PER PROCESS */
+
 #include "settings.hpp"
 
 #include <cstdint>
@@ -29,7 +31,12 @@ std::string temp_path(const char* name) {
     std::error_code ec;
     auto dir = std::filesystem::temp_directory_path(ec);
     if (ec) dir = std::filesystem::current_path();
-    return (dir / name).string();
+    /* PID in the name: this path lives in the SHARED system temp dir, and a
+     * fixed name is the same file in every concurrently-running test process
+     * (one per git worktree is normal here). Concurrent suites then delete or
+     * overwrite each other's fixtures mid-test -- observed 2026-08-13 as
+     * intermittent read-back failures with the binary md5-pinned. */
+    return (dir / (std::to_string(_getpid()) + "_" + name)).string();
 }
 
 /* Deletes its file on the way in and on the way out, so a crashed run does not

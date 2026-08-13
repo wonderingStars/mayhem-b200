@@ -13,6 +13,8 @@
 
 #include "test_main.hpp"
 
+#include <process.h> /* _getpid: shared-temp names must be unique PER PROCESS */
+
 #include "file_path.hpp"
 #include "freqman_db.hpp"
 
@@ -33,7 +35,12 @@ std::string temp_path(const char* name) {
     std::error_code ec;
     auto dir = std::filesystem::temp_directory_path(ec);
     if (ec) dir = std::filesystem::current_path();
-    return (dir / name).string();
+    /* PID in the name: this path lives in the SHARED system temp dir, and a
+     * fixed name is the same file in every concurrently-running test process
+     * (one per git worktree is normal here). Concurrent suites then delete or
+     * overwrite each other's fixtures mid-test -- observed 2026-08-13 as
+     * intermittent read-back failures with the binary md5-pinned. */
+    return (dir / (std::to_string(_getpid()) + "_" + name)).string();
 }
 
 struct ScopedFile {
@@ -618,7 +625,8 @@ TEST(freqman_db_batched_edits_with_autosave_off) {
 /* --- Named lists ------------------------------------------------------ */
 
 TEST(freqman_named_lists_live_in_the_freqman_directory) {
-    const std::string stem = "__mb200_test_category";
+    /* PID: this stem names a real file in the shared FREQMAN dir. */
+    const std::string stem = "__mb200_test_category_" + std::to_string(_getpid());
     const auto path = core::get_freqman_path(stem);
 
     CHECK(path.find(stem) != std::string::npos);
