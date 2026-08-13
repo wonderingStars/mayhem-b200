@@ -208,6 +208,49 @@ class NetworkRadio : public RadioDevice {
     void close() override;
     bool is_open() const override { return open_.load(); }
 
+    /* --- Reconnection -------------------------------------------------------
+     *
+     * A dropped link used to be terminal: every later request failed with
+     * "control connection not open", the RX thread exited, and the only cure
+     * was restarting the application. Over a network that is not a rare event
+     * -- a WiFi blip, a server restart, or the host sleeping is enough.
+     *
+     * The link now re-establishes itself, replays the session's settings onto
+     * the new connection (a fresh `open` on the server starts at the device's
+     * defaults, so without the replay the radio would come back tuned
+     * somewhere else entirely) and restarts the IQ stream if one was running.
+     *
+     * The state is published rather than hidden because "still trying" and
+     * "gave up" have to look different to whoever is watching. Presenting a
+     * dead radio as a merely idle one is the failure this exists to end. */
+    enum class LinkState {
+        Connected,    /* the control connection is up and usable */
+        Reconnecting, /* it dropped, and attempts are in progress */
+        Disconnected, /* it dropped and the policy's attempts are spent */
+    };
+
+    LinkState link_state() const { return link_state_.load(); }
+    const char* link_state_string() const;
+
+    /* Successful reconnects since open(). Non-zero means the link has been
+     * dropping, which is worth surfacing even when everything works now. */
+    unsigned reconnects() const { return reconnects_.load(); }
+
+    struct ReconnectPolicy {
+        /* Zero disables auto-reconnect: a drop becomes terminal again, which
+         * is the behaviour every caller had before this existed. */
+        unsigned max_attempts{6};
+        int first_delay_ms{100};
+        int max_delay_ms{5000};
+    };
+    void set_reconnect_policy(const ReconnectPolicy& policy) { reconnect_policy_ = policy; }
+    const ReconnectPolicy& reconnect_policy() const { return reconnect_policy_; }
+
+    /* Test seam: what to do while backing off. Defaults to a real sleep, so a
+     * test can walk the whole retry ladder without spending its wall clock in
+     * it, and can assert on the delays that were actually asked for. */
+    void set_sleep_fn(std::function<void(int ms)> fn) { sleep_fn_ = std::move(fn); }
+
     const DeviceCaps& caps() const override { return caps_; }
     const std::string& last_error() const override { return last_error_; }
 
@@ -283,6 +326,39 @@ class NetworkRadio : public RadioDevice {
     bool send_request(const std::string& cmd, const std::string& args_json, net::JsonValue& result,
                        std::string& error, int timeout_ms = 5000);
 
+    /* send_request without the reconnect-and-retry wrapper above it. Used by
+     * open() -- where a failure means the server is not there and retrying six
+     * times with backoff would only make the failure slower to report -- and
+     * by the reconnect path itself, which must not recurse into another
+     * reconnect. */
+    bool send_request_once(const std::string& cmd, const std::string& args_json, net::JsonValue& result,
+                            std::string& error, int timeout_ms = 5000);
+
+    /* Connect, hello, open, caps: the part of open() a reconnect has to redo.
+     * Leaves control_ owning a live socket on success, and nothing behind on
+     * failure. Does NOT touch the cached settings -- reseeding them from caps
+     * the way open() does is exactly what a reconnect must avoid. */
+    bool establish(const std::string& host, uint16_t port, const std::string& remote_args,
+                   std::string& error);
+
+    /* Re-applies the cached settings to a freshly established connection so
+     * the caller's tuning survives the drop. Rate goes before frequency,
+     * matching the order a fresh device is driven in. */
+    bool replay_settings(std::string& error);
+
+    /* The control-channel retry ladder. Called with config_mutex_ held. */
+    bool reconnect_control();
+
+    /* The stream's own recovery, run on the RX thread because that thread owns
+     * stream_socket_. Re-establishes the control link if that went too, asks
+     * the server to stream again, and reconnects the stream socket. */
+    bool recover_stream();
+
+    /* Sleeps `ms` in slices, giving up early if `abort` goes true, so a
+     * stop_rx() during a 5-second backoff does not wait it out. Returns false
+     * if it was aborted. */
+    bool backoff_sleep(int ms, const std::atomic<bool>& abort);
+
     /* Reads one '\n'-terminated line from `sock`, using `leftover` to carry
      * bytes read past the newline into the next call. False on a closed
      * connection or socket error. */
@@ -295,6 +371,19 @@ class NetworkRadio : public RadioDevice {
     uint16_t control_port_{5960};
     std::string session_id_;
     int next_id_{1};
+
+    /* The device-selection string open() was given, kept so a reconnect can
+     * ask the server for the same device rather than its default -- on a host
+     * with two radios attached, coming back on the wrong one is worse than
+     * not coming back at all. */
+    std::string remote_args_;
+
+    ReconnectPolicy reconnect_policy_{};
+    std::function<void(int)> sleep_fn_{};
+    std::atomic<LinkState> link_state_{LinkState::Disconnected};
+    std::atomic<unsigned> reconnects_{0};
+    /* Guards against a reconnect's own requests triggering a reconnect. */
+    bool reconnecting_{false};
 
     DeviceCaps caps_{};
     std::string last_error_{};

@@ -105,6 +105,51 @@ radio::net::SocketFactory single_socket_factory(std::string script) {
     return [script = std::move(script)] { return std::make_unique<FakeSocket>(script); };
 }
 
+/* --- Reconnection harness ---------------------------------------------------
+ *
+ * Vends one FakeSocket per connect() from a queue, keeping raw pointers so a
+ * test can read back what was sent on each connection separately -- which is
+ * the whole point when the assertion is "the settings were replayed onto the
+ * SECOND connection". An empty script, or running off the end of the queue,
+ * vends a socket that refuses to connect: that is what "the server is still
+ * down" looks like from here. */
+struct SocketQueue {
+    std::vector<std::string> scripts{};
+    size_t next{0};
+    std::vector<FakeSocket*> handed_out{};
+
+    radio::net::SocketFactory factory() {
+        return [this]() -> std::unique_ptr<radio::net::Socket> {
+            std::unique_ptr<FakeSocket> s;
+            if (next < scripts.size() && !scripts[next].empty()) {
+                s = std::make_unique<FakeSocket>(scripts[next]);
+            } else {
+                s = std::make_unique<FakeSocket>(false, "connection refused");
+            }
+            next++;
+            handed_out.push_back(s.get());
+            return s;
+        };
+    }
+};
+
+std::string ok_reply(int id, const std::string& result_json) {
+    return "{\"id\":" + std::to_string(id) + ",\"ok\":true,\"result\":" + result_json + "}\n";
+}
+
+/* Generic ok replies for ids [first, last], for the run of replayed settings
+ * whose individual values no assertion cares about. */
+std::string ok_replies(int first, int last) {
+    std::string out;
+    for (int id = first; id <= last; id++) out += ok_reply(id, "{\"hz\":1.0}");
+    return out;
+}
+
+/* A reconnect re-runs the handshake (hello=1, open=2) and then replays the
+ * cached settings: rate, frequency, gain, bandwidth, antenna -- ids 3..7. So
+ * the retried request that triggered the whole thing lands on id 8. */
+constexpr int kFirstIdAfterReplay = 8;
+
 }  // namespace
 
 /* --- JSON parsing ------------------------------------------------------------ */
@@ -468,4 +513,166 @@ TEST(network_radio_open_against_unreachable_host_fails_cleanly) {
     /* Refused, not merely slow: well under the 3 s connect timeout the
      * backend configures internally. */
     CHECK(std::chrono::duration_cast<std::chrono::seconds>(elapsed).count() < 5);
+}
+
+/* =============================================================================
+ * Reconnection
+ *
+ * A dropped link used to be terminal. These pin the four things that make
+ * recovery trustworthy rather than merely present: that it happens at all,
+ * that the session comes back configured the way the caller left it, that the
+ * retries are actually spaced, and that giving up is reported honestly instead
+ * of being papered over.
+ * ========================================================================== */
+
+TEST(network_radio_reconnects_after_the_control_link_drops) {
+    SocketQueue q;
+    /* Connection 1 answers the handshake and nothing more: the next request
+     * finds the script exhausted, which is a closed socket from here. */
+    q.scripts.push_back(kHelloReply + kOpenReply);
+    q.scripts.push_back(kHelloReply + kOpenReply + ok_replies(3, 7) +
+                        ok_reply(kFirstIdAfterReplay, "{\"hz\":100000042.0}"));
+
+    radio::NetworkRadio radio{q.factory()};
+    radio.set_sleep_fn([](int) {});
+
+    CHECK(radio.open("127.0.0.1:5960"));
+    CHECK(radio.link_state() == radio::NetworkRadio::LinkState::Connected);
+
+    /* This request dies with the link, and must come back with the answer
+     * from the reconnected one rather than a failure. */
+    const double hz = radio.set_rx_frequency(100'000'000.0);
+
+    CHECK_NEAR(hz, 100000042.0, 1e-6);
+    CHECK(radio.link_state() == radio::NetworkRadio::LinkState::Connected);
+    CHECK(radio.is_open());
+    CHECK_EQ(radio.reconnects(), 1u);
+}
+
+TEST(network_radio_replays_the_tuning_it_had_before_the_drop) {
+    /* The point of the replay. A fresh `open` on the server starts at the
+     * device's defaults, so a reconnect without this comes back live and
+     * quietly tuned somewhere else -- which is worse than staying down,
+     * because nothing looks wrong. */
+    SocketQueue q;
+    q.scripts.push_back(kHelloReply + kOpenReply + ok_reply(3, "{\"hz\":100000042.0}"));
+    q.scripts.push_back(kHelloReply + kOpenReply + ok_replies(3, 7) +
+                        ok_reply(kFirstIdAfterReplay, "{\"db\":40.0}"));
+
+    radio::NetworkRadio radio{q.factory()};
+    radio.set_sleep_fn([](int) {});
+    CHECK(radio.open("127.0.0.1:5960"));
+
+    /* Tune on the first connection, then lose it. */
+    CHECK_NEAR(radio.set_rx_frequency(100'000'000.0), 100000042.0, 1e-6);
+    radio.set_rx_gain(40.0);
+
+    CHECK(q.handed_out.size() >= 2);
+    if (q.handed_out.size() < 2) return;
+    const std::string& replayed = q.handed_out[1]->sent();
+
+    /* The frequency the server accepted, not the one that was asked for. */
+    CHECK(replayed.find("100000042") != std::string::npos);
+    CHECK(replayed.find("set_rx_rate") != std::string::npos);
+    CHECK(replayed.find("set_rx_freq") != std::string::npos);
+    CHECK(replayed.find("set_rx_gain") != std::string::npos);
+    CHECK(replayed.find("set_rx_bandwidth") != std::string::npos);
+    /* Seeded from caps' first RX antenna by open(); it has to survive too. */
+    CHECK(replayed.find("TX/RX") != std::string::npos);
+}
+
+TEST(network_radio_backs_off_between_attempts_and_caps_the_delay) {
+    SocketQueue q;
+    q.scripts.push_back(kHelloReply + kOpenReply); /* then every socket refuses */
+
+    radio::NetworkRadio radio{q.factory()};
+    std::vector<int> delays;
+    radio.set_sleep_fn([&delays](int ms) { delays.push_back(ms); });
+
+    radio::NetworkRadio::ReconnectPolicy policy;
+    policy.max_attempts = 5;
+    policy.first_delay_ms = 100;
+    policy.max_delay_ms = 400;
+    radio.set_reconnect_policy(policy);
+
+    CHECK(radio.open("127.0.0.1:5960"));
+    radio.set_rx_frequency(100'000'000.0); /* fails: nothing is listening */
+
+    /* One sleep per attempt, doubling until the cap, then flat. Hammering a
+     * server that is down is how a client turns one outage into two. */
+    CHECK_EQ(delays.size(), size_t{5});
+    if (delays.size() == 5) {
+        CHECK_EQ(delays[0], 100);
+        CHECK_EQ(delays[1], 200);
+        CHECK_EQ(delays[2], 400);
+        CHECK_EQ(delays[3], 400);
+        CHECK_EQ(delays[4], 400);
+    }
+}
+
+TEST(network_radio_reports_giving_up_rather_than_hiding_it) {
+    SocketQueue q;
+    q.scripts.push_back(kHelloReply + kOpenReply);
+
+    radio::NetworkRadio radio{q.factory()};
+    radio.set_sleep_fn([](int) {});
+    radio::NetworkRadio::ReconnectPolicy policy;
+    policy.max_attempts = 2;
+    radio.set_reconnect_policy(policy);
+
+    CHECK(radio.open("127.0.0.1:5960"));
+    radio.set_rx_frequency(100'000'000.0);
+
+    CHECK(radio.link_state() == radio::NetworkRadio::LinkState::Disconnected);
+    CHECK_STR_EQ(radio.link_state_string(), "disconnected");
+    /* is_open() must go false: a caller that keeps believing the radio is
+     * there will keep issuing requests into a hole. */
+    CHECK(!radio.is_open());
+    CHECK(!radio.last_error().empty());
+    CHECK_EQ(radio.reconnects(), 0u);
+}
+
+TEST(network_radio_reconnect_can_be_switched_off) {
+    SocketQueue q;
+    q.scripts.push_back(kHelloReply + kOpenReply);
+    /* A second connection is available; with the policy off it must go
+     * untouched, so this also proves the disable is real and not just slow. */
+    q.scripts.push_back(kHelloReply + kOpenReply + ok_replies(3, 8));
+
+    radio::NetworkRadio radio{q.factory()};
+    bool slept = false;
+    radio.set_sleep_fn([&slept](int) { slept = true; });
+    radio::NetworkRadio::ReconnectPolicy policy;
+    policy.max_attempts = 0;
+    radio.set_reconnect_policy(policy);
+
+    CHECK(radio.open("127.0.0.1:5960"));
+    radio.set_rx_frequency(100'000'000.0);
+
+    CHECK(!slept);
+    CHECK_EQ(q.handed_out.size(), size_t{1});
+    /* Still honest: reconnect being disabled does not make the link present. */
+    CHECK(radio.link_state() == radio::NetworkRadio::LinkState::Disconnected);
+    CHECK(!radio.is_open());
+}
+
+TEST(network_radio_does_not_reconnect_when_the_server_merely_says_no) {
+    /* An ok:false reply means the server is reachable and refused. Retrying
+     * that on a fresh connection would get the same refusal, having thrown
+     * away a working link and the session with it. */
+    SocketQueue q;
+    q.scripts.push_back(kHelloReply + kOpenReply +
+                        "{\"id\":3,\"ok\":false,\"error\":\"frequency out of range\"}\n");
+
+    radio::NetworkRadio radio{q.factory()};
+    bool slept = false;
+    radio.set_sleep_fn([&slept](int) { slept = true; });
+
+    CHECK(radio.open("127.0.0.1:5960"));
+    radio.set_rx_frequency(100'000'000.0);
+
+    CHECK(!slept);
+    CHECK_EQ(q.handed_out.size(), size_t{1});
+    CHECK(radio.link_state() == radio::NetworkRadio::LinkState::Connected);
+    CHECK(radio.is_open());
 }

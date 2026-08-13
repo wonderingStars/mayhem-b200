@@ -121,6 +121,14 @@ class RadioDevice {
     /* Short name of the backend, for the UI and logs: "uhd", "sdrlink", ... */
     virtual const char* driver_name() const = 0;
 
+    /* How the link to the device is doing: "connected", "reconnecting" or
+     * "disconnected". Only a networked backend can be in the middle state, so
+     * the default answers from is_open() and a local device never reports it.
+     * Published so a UI can distinguish a link that is coming back from one
+     * that has given up, instead of showing both as a radio that is simply
+     * idle. See NetworkRadio::LinkState. */
+    virtual const char* link_state_string() const { return is_open() ? "connected" : "disconnected"; }
+
     /* --- Configuration --- */
     virtual double set_master_clock_rate(double rate_hz) = 0;
 

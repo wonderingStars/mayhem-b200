@@ -260,6 +260,7 @@ AppBridge::AppBridge() {
     JsonValue status = JsonValue::object();
     status.set("device", JsonValue::string("no device"));
     status.set("device_ok", JsonValue::boolean(false));
+    status.set("link", JsonValue::string("disconnected"));
     status.set("receiving", JsonValue::boolean(false));
     status.set("transmitting", JsonValue::boolean(false));
     status.set("version", JsonValue::string(app::kVersion));
@@ -285,6 +286,11 @@ void AppBridge::refresh() {
     const bool device_open = (ctx.radio != nullptr) && ctx.radio->is_open();
     status.set("device", JsonValue::string(device_open ? ctx.radio->caps().mboard : std::string{"no device"}));
     status.set("device_ok", JsonValue::boolean(device_open));
+    /* Not the same question as device_ok: a networked radio that dropped is
+     * "reconnecting" while it climbs its retry ladder, and showing that as a
+     * plain offline device hides the fact that it is coming back. */
+    status.set("link", JsonValue::string(ctx.radio != nullptr ? ctx.radio->link_state_string()
+                                                             : "disconnected"));
     status.set("receiving", JsonValue::boolean((ctx.receiver != nullptr) && ctx.receiver->running()));
     status.set("transmitting", JsonValue::boolean((ctx.radio != nullptr) && ctx.radio->tx_running()));
     status.set("version", JsonValue::string(app::kVersion));

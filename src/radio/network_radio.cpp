@@ -896,6 +896,9 @@ bool read_exact(net::Socket& sock, uint8_t* buf, size_t len, const std::atomic<b
 NetworkRadio::NetworkRadio() : NetworkRadio(net::make_platform_socket) {}
 
 NetworkRadio::NetworkRadio(net::SocketFactory socket_factory) : socket_factory_(std::move(socket_factory)) {
+    sleep_fn_ = [](int ms) {
+        if (ms > 0) std::this_thread::sleep_for(std::chrono::milliseconds(ms));
+    };
     caps_.mboard = "sdrlink (not connected)";
     /* Unlike UsrpRadio there is no published fallback spec here — sdrlink can
      * front any device the server chooses to expose — so every Range stays at
@@ -943,57 +946,12 @@ bool NetworkRadio::open(const std::string& args) {
     }
     if (host.empty()) host = "127.0.0.1";
 
-    auto sock = socket_factory_();
-    if (!sock) {
-        last_error_ = "sdrlink: no socket implementation available on this platform";
-        return false;
-    }
     std::string err;
-    if (!sock->connect(host, port, kConnectTimeoutMs, err)) {
-        last_error_ = err.empty() ? "sdrlink: connect failed" : err;
+    if (!establish(host, port, remote_args, err)) {
+        last_error_ = err;
         return false;
     }
-    sock->set_recv_timeout(kControlRecvTimeoutMs);
-
-    control_ = std::move(sock);
-    control_leftover_.clear();
-    host_ = host;
-    control_port_ = port;
-    next_id_ = 1;
-
-    net::JsonValue result;
-    if (!send_request("hello", "{\"client\":\"mayhem-b200\",\"proto\":1}", result, err)) {
-        last_error_ = "sdrlink: hello failed: " + err;
-        control_->close();
-        control_.reset();
-        return false;
-    }
-    const net::JsonValue* sid = result.find("session_id");
-    if (sid == nullptr) {
-        last_error_ = "sdrlink: hello reply missing session_id";
-        control_->close();
-        control_.reset();
-        return false;
-    }
-    session_id_ = sid->as_string();
-
-    /* Empty device-selection args asks the server to open its default
-     * device, the same convention UsrpRadio uses for an empty args string. */
-    std::string open_args = "{\"args\":\"" + net::json_escape(remote_args) + "\"}";
-    if (!send_request("open", open_args, result, err, kOpenOverallTimeoutMs)) {
-        last_error_ = "sdrlink: open failed: " + err;
-        control_->close();
-        control_.reset();
-        return false;
-    }
-    const net::JsonValue* caps_json = result.find("caps");
-    if (caps_json == nullptr || !caps_json->is_object()) {
-        last_error_ = "sdrlink: open reply missing caps";
-        control_->close();
-        control_.reset();
-        return false;
-    }
-    caps_ = caps_from_json(*caps_json);
+    remote_args_ = remote_args;
 
     rx_ring_ = std::make_unique<dsp::RingBuffer<cfloat>>(ring_capacity_);
     tx_ring_ = std::make_unique<dsp::RingBuffer<cfloat>>(ring_capacity_);
@@ -1016,7 +974,64 @@ bool NetworkRadio::open(const std::string& args) {
 
     stats_.reset();
     last_error_.clear();
+    link_state_.store(LinkState::Connected);
+    reconnects_.store(0);
     open_.store(true);
+    return true;
+}
+
+bool NetworkRadio::establish(const std::string& host, uint16_t port, const std::string& remote_args,
+                             std::string& error) {
+    auto sock = socket_factory_();
+    if (!sock) {
+        error = "sdrlink: no socket implementation available on this platform";
+        return false;
+    }
+    std::string err;
+    if (!sock->connect(host, port, kConnectTimeoutMs, err)) {
+        error = err.empty() ? "sdrlink: connect failed" : err;
+        return false;
+    }
+    sock->set_recv_timeout(kControlRecvTimeoutMs);
+
+    control_ = std::move(sock);
+    control_leftover_.clear();
+    host_ = host;
+    control_port_ = port;
+    next_id_ = 1;
+
+    /* send_request_once, not send_request: a failure here is either the first
+     * connection (where the server simply is not there, and six backed-off
+     * retries would only delay saying so) or a reconnect attempt already
+     * inside the ladder. */
+    net::JsonValue result;
+    const auto fail = [&](std::string message) {
+        error = std::move(message);
+        if (control_) {
+            control_->close();
+            control_.reset();
+        }
+        return false;
+    };
+
+    if (!send_request_once("hello", "{\"client\":\"mayhem-b200\",\"proto\":1}", result, err)) {
+        return fail("sdrlink: hello failed: " + err);
+    }
+    const net::JsonValue* sid = result.find("session_id");
+    if (sid == nullptr) return fail("sdrlink: hello reply missing session_id");
+    session_id_ = sid->as_string();
+
+    /* Empty device-selection args asks the server to open its default
+     * device, the same convention UsrpRadio uses for an empty args string. */
+    const std::string open_args = "{\"args\":\"" + net::json_escape(remote_args) + "\"}";
+    if (!send_request_once("open", open_args, result, err, kOpenOverallTimeoutMs)) {
+        return fail("sdrlink: open failed: " + err);
+    }
+    const net::JsonValue* caps_json = result.find("caps");
+    if (caps_json == nullptr || !caps_json->is_object()) {
+        return fail("sdrlink: open reply missing caps");
+    }
+    caps_ = caps_from_json(*caps_json);
     return true;
 }
 
@@ -1028,12 +1043,16 @@ void NetworkRadio::close() {
         if (open_.load()) {
             net::JsonValue result;
             std::string err;
-            send_request("close", "", result, err); /* best-effort */
+            /* send_request_once: a close that finds the link already gone has
+             * nothing to say to the server, and reconnecting just to announce
+             * a shutdown would stall close() through the whole retry ladder. */
+            send_request_once("close", "", result, err); /* best-effort */
         }
         control_->close();
         control_.reset();
     }
     session_id_.clear();
+    link_state_.store(LinkState::Disconnected);
     open_.store(false);
 }
 
@@ -1057,8 +1076,121 @@ bool NetworkRadio::read_line(net::Socket& sock, std::string& leftover, std::stri
     }
 }
 
+const char* NetworkRadio::link_state_string() const {
+    switch (link_state_.load()) {
+        case LinkState::Connected: return "connected";
+        case LinkState::Reconnecting: return "reconnecting";
+        case LinkState::Disconnected: return "disconnected";
+    }
+    return "disconnected";
+}
+
+bool NetworkRadio::backoff_sleep(int ms, const std::atomic<bool>& abort) {
+    /* In slices, so stop_rx() during a five-second backoff does not have to
+     * wait the whole thing out before the thread notices it should quit. */
+    constexpr int kSlice = 50;
+    for (int left = ms; left > 0; left -= kSlice) {
+        if (abort.load()) return false;
+        sleep_fn_(left < kSlice ? left : kSlice);
+    }
+    return !abort.load();
+}
+
 bool NetworkRadio::send_request(const std::string& cmd, const std::string& args_json, net::JsonValue& result,
                                  std::string& error, int timeout_ms) {
+    if (send_request_once(cmd, args_json, result, error, timeout_ms)) return true;
+
+    /* Only a lost connection is worth reconnecting for. An ok:false reply is
+     * the server answering -- it is reachable and it said no, so retrying the
+     * same request on a new connection would just get the same answer.
+     * send_request_once closes control_ on connection loss and leaves it open
+     * otherwise, which is what distinguishes the two here. */
+    const bool connection_lost = (!control_ || !control_->is_open());
+    if (!connection_lost || reconnecting_) return false;
+
+    if (reconnect_policy_.max_attempts == 0) {
+        /* Reconnect is switched off, but the link is still gone. Say so --
+         * leaving link_state() reading "connected" would be the exact lie
+         * this state exists to prevent. */
+        link_state_.store(LinkState::Disconnected);
+        open_.store(false);
+        return false;
+    }
+
+    if (!reconnect_control()) return false;
+    return send_request_once(cmd, args_json, result, error, timeout_ms);
+}
+
+bool NetworkRadio::reconnect_control() {
+    /* Set before the first attempt so anything reading link_state() while the
+     * ladder runs sees "reconnecting" rather than a stale "connected". */
+    reconnecting_ = true;
+    link_state_.store(LinkState::Reconnecting);
+
+    int delay = reconnect_policy_.first_delay_ms;
+    for (unsigned attempt = 0; attempt < reconnect_policy_.max_attempts; attempt++) {
+        sleep_fn_(delay);
+        delay = (delay >= reconnect_policy_.max_delay_ms) ? reconnect_policy_.max_delay_ms
+                                                          : delay * 2;
+        if (delay > reconnect_policy_.max_delay_ms) delay = reconnect_policy_.max_delay_ms;
+
+        std::string err;
+        if (!establish(host_, control_port_, remote_args_, err)) continue;
+
+        /* A connection we cannot put back into the caller's configuration is
+         * worse than no connection: the radio would be live and quietly tuned
+         * to the device's defaults. Drop it and try again. */
+        if (!replay_settings(err)) {
+            if (control_) {
+                control_->close();
+                control_.reset();
+            }
+            continue;
+        }
+
+        reconnecting_ = false;
+        reconnects_.fetch_add(1);
+        link_state_.store(LinkState::Connected);
+        open_.store(true);
+        last_error_.clear();
+        return true;
+    }
+
+    reconnecting_ = false;
+    link_state_.store(LinkState::Disconnected);
+    open_.store(false);
+    last_error_ = "sdrlink: reconnect gave up after " +
+                  std::to_string(reconnect_policy_.max_attempts) + " attempts";
+    return false;
+}
+
+bool NetworkRadio::replay_settings(std::string& error) {
+    net::JsonValue result;
+
+    /* Rate first: on most drivers the achievable frequency and bandwidth
+     * depend on it, so replaying frequency against a default rate can land
+     * somewhere the server then has to round. */
+    const struct {
+        const char* cmd;
+        double value;
+    } numeric[] = {
+        {"set_rx_rate", rx_rate_},   {"set_rx_freq", rx_freq_},
+        {"set_rx_gain", rx_gain_},   {"set_rx_bandwidth", rx_bw_},
+    };
+    for (const auto& s : numeric) {
+        const std::string args = "{\"hz\":" + net::format_json_number(s.value) + "}";
+        if (!send_request_once(s.cmd, args, result, error)) return false;
+    }
+
+    if (!rx_antenna_.empty()) {
+        const std::string args = "{\"name\":\"" + net::json_escape(rx_antenna_) + "\"}";
+        if (!send_request_once("set_rx_antenna", args, result, error)) return false;
+    }
+    return true;
+}
+
+bool NetworkRadio::send_request_once(const std::string& cmd, const std::string& args_json, net::JsonValue& result,
+                                      std::string& error, int timeout_ms) {
     if (!control_ || !control_->is_open()) {
         error = "sdrlink: control connection not open";
         return false;
@@ -1435,32 +1567,97 @@ void NetworkRadio::stop_rx() {
     send_request("stop_rx", "", result, err); /* best-effort */
 }
 
-void NetworkRadio::rx_thread_main() {
-    net::Socket* stream = stream_socket_.get();
-    if (stream == nullptr) {
-        rx_running_.store(false);
-        return;
+bool NetworkRadio::recover_stream() {
+    /* The stream socket is this thread's to own, which is why recovery lives
+     * here rather than in send_request's ladder: stop_rx() joins this thread
+     * BEFORE it takes config_mutex_, so taking the lock here cannot deadlock
+     * against a shutdown. */
+    if (stream_socket_) {
+        stream_socket_->close();
+        stream_socket_.reset();
     }
 
+    int delay = reconnect_policy_.first_delay_ms;
+    for (unsigned attempt = 0; attempt < reconnect_policy_.max_attempts; attempt++) {
+        if (!backoff_sleep(delay, rx_stop_)) return false;
+        delay = (delay * 2 > reconnect_policy_.max_delay_ms) ? reconnect_policy_.max_delay_ms : delay * 2;
+
+        std::lock_guard<std::mutex> g{config_mutex_};
+
+        /* The control link usually went with it -- one cable, one outage. */
+        if (!control_ || !control_->is_open()) {
+            link_state_.store(LinkState::Reconnecting);
+            std::string err;
+            if (!establish(host_, control_port_, remote_args_, err)) continue;
+            if (!replay_settings(err)) {
+                if (control_) {
+                    control_->close();
+                    control_.reset();
+                }
+                continue;
+            }
+            reconnects_.fetch_add(1);
+            link_state_.store(LinkState::Connected);
+            open_.store(true);
+        }
+
+        net::JsonValue result;
+        std::string err;
+        if (!send_request_once("start_rx", "{\"format\":\"cf32\"}", result, err)) continue;
+
+        auto sock = socket_factory_();
+        if (!sock) return false;
+        const uint16_t stream_port = static_cast<uint16_t>(control_port_ + 1);
+        if (!sock->connect(host_, stream_port, kConnectTimeoutMs, err)) continue;
+        sock->set_recv_timeout(kStreamRecvTimeoutMs);
+
+        const std::string session_line = "{\"session_id\":\"" + net::json_escape(session_id_) + "\"}\n";
+        if (!sock->send_all(session_line.data(), session_line.size())) continue;
+
+        stream_socket_ = std::move(sock);
+        return true;
+    }
+
+    link_state_.store(LinkState::Disconnected);
+    open_.store(false);
+    return false;
+}
+
+void NetworkRadio::rx_thread_main() {
     const net::SampleFormat fmt = rx_format_;
     const size_t sample_bytes = net::bytes_per_sample(fmt);
 
     uint8_t header_buf[net::FrameHeader::kSize];
     std::vector<uint8_t> payload;
     std::vector<cfloat> converted;
-    bool have_last_seq = false;
-    uint32_t last_seq = 0;
 
     while (!rx_stop_.load()) {
+        net::Socket* stream = stream_socket_.get();
+        if (stream == nullptr) break;
+
+        /* Sequence numbers belong to one stream. A recovered stream starts its
+         * own, so carrying last_seq across would score the restart as a huge
+         * drop and corrupt rx_dropped. */
+        bool have_last_seq = false;
+        uint32_t last_seq = 0;
+        bool lost_stream = false;
+
+        while (!rx_stop_.load()) {
         if (!read_exact(*stream, header_buf, sizeof(header_buf), rx_stop_)) {
-            if (!rx_stop_.load()) stats_.errors++;
+            if (!rx_stop_.load()) {
+                stats_.errors++;
+                lost_stream = true;
+            }
             break;
         }
 
         net::FrameHeader header;
         if (!net::parse_frame_header(header_buf, sizeof(header_buf), header)) {
             stats_.errors++;
-            break; /* bad magic: the stream is desynced, nothing to recover to */
+            /* Bad magic: this stream is desynced past recovery, but a fresh
+             * one starts clean, so it is still worth reconnecting. */
+            lost_stream = true;
+            break;
         }
 
         if (header.flags & net::FrameHeader::kOverflowFlag) stats_.overflows++;
@@ -1476,7 +1673,10 @@ void NetworkRadio::rx_thread_main() {
         if (payload_bytes > 0) {
             payload.resize(payload_bytes);
             if (!read_exact(*stream, payload.data(), payload_bytes, rx_stop_)) {
-                if (!rx_stop_.load()) stats_.errors++;
+                if (!rx_stop_.load()) {
+                    stats_.errors++;
+                    lost_stream = true;
+                }
                 break;
             }
         }
@@ -1491,6 +1691,15 @@ void NetworkRadio::rx_thread_main() {
         const size_t written = rx_ring_->write(converted.data(), converted.size());
         stats_.rx_samples += written;
         if (written < converted.size()) stats_.rx_dropped += static_cast<uint32_t>(converted.size() - written);
+        }
+
+        if (rx_stop_.load() || !lost_stream) break;
+        if (reconnect_policy_.max_attempts == 0) break;
+
+        /* The level reading belongs to a stream that no longer exists; leaving
+         * the last value standing would show signal on a dead radio. */
+        rx_level_db_.store(-140.0f);
+        if (!recover_stream()) break;
     }
 
     rx_running_.store(false);

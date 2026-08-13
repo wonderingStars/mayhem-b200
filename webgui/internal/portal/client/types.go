@@ -99,7 +99,15 @@ func (p Panel) HasData() bool { return p.PanelKind != "" }
 type Status struct {
 	// Device is a human-readable device label (e.g. "B200 EDR04ZDB2"), or
 	// empty if no radio is attached/opened.
-	Device       string `json:"device,omitempty"`
+	Device string `json:"device,omitempty"`
+	// Link is how the connection to the radio is doing: "connected",
+	// "reconnecting" or "disconnected". Only a networked backend (sdrlink)
+	// ever reports the middle value, while it works through its retry
+	// ladder. This struct is re-encoded on the way to the browser, so a
+	// field missing here is dropped no matter what the backend sends --
+	// which is exactly how can_go_back and version went missing before
+	// contract_test.go existed.
+	Link         string `json:"link,omitempty"`
 	Receiving    bool   `json:"receiving"`
 	Transmitting bool   `json:"transmitting"`
 	Version      string `json:"version,omitempty"`

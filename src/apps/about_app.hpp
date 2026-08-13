@@ -34,8 +34,13 @@ namespace app {
  * reported capabilities instead of being fixed at the HackRF's. Measured on
  * live 1090 MHz traffic in paired alternating windows: 0.485 -> 22.88 accepted
  * ADS-B frames/sec, 2-3 -> 7-11 aircraft tracked. The web portal is
- * redesigned around the same work. */
-constexpr const char* kVersion = "0.10.0";
+ * redesigned around the same work.
+ * 0.11.0: a dropped sdrlink connection recovers instead of ending the
+ * session. The control link and the IQ stream both re-establish themselves
+ * with backed-off retries, the session's tuning is replayed onto the new
+ * connection, and GET /api/status carries a "link" field so a link that is
+ * coming back is distinguishable from one that has given up. */
+constexpr const char* kVersion = "0.11.0";
 
 class AboutView : public ui::View {
    public:
