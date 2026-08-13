@@ -51,8 +51,14 @@ namespace app {
  * Changing the sample rate while streaming re-initialises the radio under the
  * streamer already handed out, and the receiver then goes silently deaf --
  * which is why an app opened directly from another app could fail to
- * receive. */
-constexpr const char* kVersion = "0.11.3";
+ * receive.
+ * 0.11.4: hardware-gated regression tests (MB200_HW_TESTS=1) run the
+ * clock-move and transmit paths against a real USRP; first hardware evidence
+ * the TX plumbing works. set_rx_rate keeps caps().master_clock_rate honest on
+ * every call. Test-suite hardening: no fixture collides across concurrent
+ * processes, no detached thread can dangle a stack frame, and scheduling
+ * assumptions under load became guarantees. */
+constexpr const char* kVersion = "0.11.4";
 
 class AboutView : public ui::View {
    public:

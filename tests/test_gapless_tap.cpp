@@ -590,6 +590,21 @@ TEST(gapless_tap_survives_open_and_close_under_a_running_producer) {
         }
     });
 
+    /* Wait for the producer to actually run before churning the control path.
+     * The point of this test is that open/close/restart overlap a LIVE
+     * producer; a freshly created thread is not guaranteed any CPU before the
+     * 200-iteration loop below finishes, and on a heavily loaded machine
+     * (parallel builds saturating every core, 2026-08-13) it genuinely got
+     * none — the old post-loop "writes > 0" check then failed with the churn
+     * loop having raced nobody at all. Asserting up front turns the
+     * scheduling assumption into a guarantee, and makes the assertion mean
+     * what it says: the stress ran against a running producer. */
+    const auto start_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+    while (writes.load() == 0 && std::chrono::steady_clock::now() < start_deadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    CHECK(writes.load() > 0);
+
     std::vector<dsp::cfloat> out;
     for (int i = 0; i < 200; i++) {
         tap.read(out);
@@ -601,8 +616,6 @@ TEST(gapless_tap_survives_open_and_close_under_a_running_producer) {
 
     stop.store(true);
     producer.join();
-
-    CHECK(writes.load() > 0);
     CHECK(tap.is_open());
     CHECK_EQ(tap.capacity(), size_t{8192});
     check_accounting(tap);

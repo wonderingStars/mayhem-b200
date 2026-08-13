@@ -257,12 +257,21 @@ TEST(an_overflowing_gapless_tap_costs_only_its_own_samples) {
     SpectrumWatch spec;
     std::vector<dsp::cfloat> spec_out;
 
+    /* Poll until the producer is done AND the spectrum evidence is in hand,
+     * bounded by the stall deadline. Stopping at producer_done alone assumed
+     * this thread got enough CPU during the run to observe two snapshots —
+     * on a loaded machine (parallel builds on every core, 2026-08-13) it
+     * observed one or none, and the final assertions failed with the DSP
+     * thread still happily draining its backlog. The property under test is
+     * "the spectrum tap kept working", not "this test thread was scheduled
+     * promptly", so it may keep collecting after the producer finishes. */
     const auto started = std::chrono::steady_clock::now();
-    while (!radio.producer_done() && !past(started, kNoStallLimit)) {
+    while (!past(started, kNoStallLimit)) {
         if (rx.take_spectrum_samples(spec_out, kSpectrumWindow))
             spec.observe(spec_out, kSpectrumWindow);
         else
             std::this_thread::yield();
+        if (radio.producer_done() && spec.snapshots > 1 && spec.last_base > spec.first_base) break;
     }
 
     /* If write() back-pressured instead of dropping, the DSP thread would be

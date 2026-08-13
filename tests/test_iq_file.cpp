@@ -12,6 +12,8 @@
 
 #include "test_main.hpp"
 
+#include <process.h> /* _getpid: fixture dirs must be unique PER PROCESS */
+
 #include "iq_file.hpp"
 #include "replay_model.hpp"
 #include "ring_buffer.hpp"
@@ -38,6 +40,7 @@ class TempDir {
         static std::atomic<int> counter{0};
         path_ = std::filesystem::temp_directory_path() /
                 ("mb200_iq_" + std::string{tag} + "_" +
+                 std::to_string(_getpid()) + "_" +
                  std::to_string(counter.fetch_add(1)));
         std::error_code ec;
         std::filesystem::remove_all(path_, ec);
@@ -102,6 +105,12 @@ cfloat ramp_sample(uint64_t i) {
     return cfloat{f, -f};
 }
 
+/* Deadlines passed here are HANG GUARDS, not part of any property: they only
+ * bound how long a genuinely broken replay can stall the suite, and the wait
+ * returns the instant the predicate turns true. Size them for a saturated
+ * machine, not a quiet one -- the replay paces itself with short sleeps whose
+ * wakeups quantise to Windows' ~15.6 ms timer and stretch several-fold under
+ * load; parallel builds on every core flaked a 5 s guard on 2026-08-13. */
 bool wait_until(const std::function<bool()>& predicate, int timeout_ms) {
     const auto deadline =
         std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms);
@@ -745,7 +754,7 @@ TEST(replay_streams_the_whole_file_in_order) {
     CHECK(replay.play());
     CHECK(replay.playing());
 
-    CHECK(wait_until([&] { return replay.finished(); }, 5000));
+    CHECK(wait_until([&] { return replay.finished(); }, 30'000));
 
     /* Without resampling every file sample reaches the sink exactly once. */
     CHECK_EQ(replay.samples_delivered(), count);
@@ -776,7 +785,7 @@ TEST(replay_resamples_to_the_output_rate) {
     CHECK_NEAR(replay.effective_output_rate(), 2'000'000.0, 1e-9);
 
     CHECK(replay.play());
-    CHECK(wait_until([&] { return replay.finished(); }, 5000));
+    CHECK(wait_until([&] { return replay.finished(); }, 30'000));
 
     CHECK_EQ(replay.samples_delivered(), count * 2);
     CHECK_EQ(replay.position_samples(), count);
@@ -796,7 +805,7 @@ TEST(replay_feeds_a_ring_buffer_sink) {
     CHECK(replay.has_sink());
     CHECK(replay.open(path));
     CHECK(replay.play());
-    CHECK(wait_until([&] { return replay.finished(); }, 5000));
+    CHECK(wait_until([&] { return replay.finished(); }, 30'000));
 
     CHECK_EQ(replay.samples_delivered(), count);
 
@@ -922,7 +931,7 @@ TEST(replay_paces_at_the_file_sample_rate) {
      * granularity but insist it is nothing like the whole file. */
     CHECK(after_60ms < count / 2);
 
-    CHECK(wait_until([&] { return replay.finished(); }, 5000));
+    CHECK(wait_until([&] { return replay.finished(); }, 30'000));
     const auto elapsed = std::chrono::steady_clock::now() - started;
     const double seconds = std::chrono::duration<double>(elapsed).count();
 
@@ -947,7 +956,7 @@ TEST(replay_seek_moves_the_read_point) {
     CHECK_NEAR(replay.progress(), 0.75, 1e-12);
 
     CHECK(replay.play());
-    CHECK(wait_until([&] { return replay.finished(); }, 5000));
+    CHECK(wait_until([&] { return replay.finished(); }, 30'000));
 
     /* Only the tail after the seek point went out. */
     CHECK_EQ(replay.samples_delivered(), uint64_t{5000});
@@ -979,12 +988,12 @@ TEST(replay_play_after_finishing_starts_over) {
     CHECK(replay.open(path));
 
     CHECK(replay.play());
-    CHECK(wait_until([&] { return replay.finished(); }, 5000));
+    CHECK(wait_until([&] { return replay.finished(); }, 30'000));
     CHECK_EQ(replay.samples_delivered(), count);
 
     /* A second play() rewinds instead of returning immediately at EOF. */
     CHECK(replay.play());
-    CHECK(wait_until([&] { return replay.finished(); }, 5000));
+    CHECK(wait_until([&] { return replay.finished(); }, 30'000));
     CHECK_EQ(replay.samples_delivered(), count);
     CHECK_EQ(sink.size(), static_cast<size_t>(count * 2));
 }

@@ -303,12 +303,17 @@ double UsrpRadio::set_rx_rate(double rate_hz) {
     }
 
     const double clock_after = impl_->usrp->get_master_clock_rate(0);
+    /* Kept honest on every call, not only when the rebuild branch runs: a
+     * caller (or test) probing which clock a rate selects reads caps, and a
+     * stale value here is exactly how this fix's own regression test managed
+     * to pass with the fix disabled -- its rate pair never actually moved the
+     * clock and nothing could tell. */
+    caps_.master_clock_rate = clock_after;
     if (clock_after != clock_before && rx_running_.load() && impl_->rx_stream) {
         try {
             uhd::stream_args_t args("fc32", "sc16");
             args.channels = {kChannel};
             impl_->rx_stream = impl_->usrp->get_rx_stream(args);
-            caps_.master_clock_rate = clock_after;
             /* The rx thread caches the streamer for the life of one recv loop,
              * so replacing the pointer alone would leave it reading the dead
              * one forever. Bumping the generation is what tells it to pick the

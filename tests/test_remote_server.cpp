@@ -181,11 +181,17 @@ TEST(remote_server_stop_returns_promptly_while_accept_is_blocked) {
      * before it blocks would not exercise the wakeup at all. */
     std::this_thread::sleep_for(std::chrono::milliseconds(150));
 
-    std::atomic<bool> finished{false};
-    std::thread stopper([server, &finished] {
+    /* finished lives on the heap; see the stopper below. */
+    /* shared_ptr, not a reference: on the wedged path below this thread is
+     * DETACHED and the test returns, so anything it touches by reference is
+     * destroyed under it -- a leaked thread scribbling on a dead stack frame
+     * is how one wedged test segfaults an unrelated one minutes later. */
+    auto finished_shared = std::make_shared<std::atomic<bool>>(false);
+    std::thread stopper([server, finished_shared] {
         server->stop();
-        finished.store(true);
+        finished_shared->store(true);
     });
+    auto& finished = *finished_shared;
 
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
     while (!finished.load() && std::chrono::steady_clock::now() < deadline)

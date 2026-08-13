@@ -15,6 +15,8 @@
 
 #include "test_main.hpp"
 
+#include <process.h> /* _getpid: fixture dirs must be unique PER PROCESS */
+
 #include "modulate.hpp"       /* dsp::bit_at */
 #include "ui_ook_editor.hpp"  /* app::ook_editor::* */
 
@@ -35,6 +37,7 @@ class TempDir {
         static std::atomic<int> counter{0};
         path_ = std::filesystem::temp_directory_path() /
                 ("mb200_ook_" + std::string{tag} + "_" +
+                 std::to_string(_getpid()) + "_" +
                  std::to_string(counter.fetch_add(1)));
         std::error_code ec;
         std::filesystem::remove_all(path_, ec);

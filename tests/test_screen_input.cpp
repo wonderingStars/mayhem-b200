@@ -357,18 +357,26 @@ TEST(screen_route_clamps_an_over_long_wait_instead_of_ignoring_it) {
     remote::RemoteServer server;
     CHECK(server.start(0));
 
-    TestClient client;
-    CHECK(client.connect_to(server.port()));
-    client.set_read_timeout_ms(8000);
-    CHECK(client.send_line("GET /api/screen?after=" + std::to_string(seq) +
-                           "&wait_ms=60000 HTTP/1.1\r\nHost: x\r\n\r\n"));
+    /* Everything the reader thread touches is shared-owned, never a stack
+     * reference: on the wedged path below the thread is DETACHED and this
+     * test returns, and a leaked thread finishing a socket read into a
+     * destroyed local is memory corruption that detonates in whatever test
+     * runs later — observed as a 1-in-15 segfault in an unrelated jammer
+     * test under machine load, 2026-08-13. A leak must be a true leak. */
+    auto client = std::make_shared<TestClient>();
+    CHECK(client->connect_to(server.port()));
+    client->set_read_timeout_ms(8000);
+    CHECK(client->send_line("GET /api/screen?after=" + std::to_string(seq) +
+                            "&wait_ms=60000 HTTP/1.1\r\nHost: x\r\n\r\n"));
 
-    std::atomic<bool> replied{false};
-    std::string response;
-    std::thread reader([&] {
-        response = client.read_all();
-        replied.store(true);
+    auto replied_shared = std::make_shared<std::atomic<bool>>(false);
+    auto response_shared = std::make_shared<std::string>();
+    std::thread reader([client, replied_shared, response_shared] {
+        *response_shared = client->read_all();
+        replied_shared->store(true);
     });
+    auto& replied = *replied_shared;
+    auto& response = *response_shared;
 
     std::this_thread::sleep_for(std::chrono::milliseconds(250));
     CHECK(!replied.load());  /* a dropped wait_ms would have 204'd instantly */
@@ -632,31 +640,37 @@ TEST(server_stop_releases_an_in_flight_long_poll_promptly) {
     auto* server = new remote::RemoteServer();
     CHECK(server->start(0));
 
-    TestClient client;
-    CHECK(client.connect_to(server->port()));
-    client.set_read_timeout_ms(8000);
+    /* Shared-owned, not stack references: both threads below are DETACHED on
+     * the wedged path and this test returns — see the site above for the
+     * segfault this caused. A leak must be a true leak, never a dangle. */
+    auto client = std::make_shared<TestClient>();
+    CHECK(client->connect_to(server->port()));
+    client->set_read_timeout_ms(8000);
     /* after == the current seq, so nothing can satisfy this poll on its own;
      * only the cancellation can end it before its 10 s wait. */
-    CHECK(client.send_line("GET /api/screen?after=" + std::to_string(seq) +
-                           "&wait_ms=10000 HTTP/1.1\r\nHost: x\r\n\r\n"));
+    CHECK(client->send_line("GET /api/screen?after=" + std::to_string(seq) +
+                            "&wait_ms=10000 HTTP/1.1\r\nHost: x\r\n\r\n"));
 
-    std::atomic<bool> replied{false};
-    std::string response;
-    std::thread reader([&] {
-        response = client.read_all();
-        replied.store(true);
+    auto replied_shared = std::make_shared<std::atomic<bool>>(false);
+    auto response_shared = std::make_shared<std::string>();
+    std::thread reader([client, replied_shared, response_shared] {
+        *response_shared = client->read_all();
+        replied_shared->store(true);
     });
+    auto& replied = *replied_shared;
+    auto& response = *response_shared;
 
     /* Let the handler actually reach the wait before stopping. */
     std::this_thread::sleep_for(std::chrono::milliseconds(250));
     CHECK(!replied.load());
 
-    std::atomic<bool> stopped{false};
+    auto stopped_shared = std::make_shared<std::atomic<bool>>(false);
     const auto stop_started = std::chrono::steady_clock::now();
-    std::thread stopper([server, &stopped] {
+    std::thread stopper([server, stopped_shared] {
         server->stop();
-        stopped.store(true);
+        stopped_shared->store(true);
     });
+    auto& stopped = *stopped_shared;
 
     auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
     while (!stopped.load() && std::chrono::steady_clock::now() < deadline)

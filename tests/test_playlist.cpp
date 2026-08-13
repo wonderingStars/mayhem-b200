@@ -15,6 +15,8 @@
 
 #include "test_main.hpp"
 
+#include <process.h> /* _getpid: fixture dirs must be unique PER PROCESS */
+
 #include "iq_file.hpp"
 #include "replay_model.hpp"
 #include "string_format.hpp"
@@ -38,6 +40,7 @@ class TempDir {
         static std::atomic<int> counter{0};
         path_ = std::filesystem::temp_directory_path() /
                 ("mb200_ppl_" + std::string{tag} + "_" +
+                 std::to_string(_getpid()) + "_" +
                  std::to_string(counter.fetch_add(1)));
         std::error_code ec;
         std::filesystem::remove_all(path_, ec);
