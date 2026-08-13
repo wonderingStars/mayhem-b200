@@ -28,10 +28,12 @@
  * so a device whose caps report a lower ceiling will not reach band E7/E8.
  *
  * POWER READING: upstream's ChannelStatistics.max_db is the M4's per-block peak
- * of the decimated channel. The host equivalent is ReceiverModel's smoothed
- * channel_level_db(), which is a mean rather than a peak — see the note in the
- * .cpp. The detector logic is identical either way; only the numbers a given
- * threshold corresponds to differ.
+ * of the decimated channel. The host equivalent is ReceiverModel's
+ * rf_level_db(), the RMS the radio takes over each block it receives — which is
+ * the power in this app's 750 kHz capture, since the capture IS the channel
+ * being measured. It is a mean rather than a peak; the detector logic is
+ * identical either way, only the numbers a given threshold corresponds to
+ * differ. See the note in the .cpp for why it is not channel_level_db().
  *
  * Copyright (C) 2025 berkeozkir (Berke Ozkir) (original app)
  * Copyright (C) 2026 mayhem-b200 contributors (host port)
@@ -191,6 +193,10 @@ class FpvDetectView : public ui::View {
     void on_hide() override;
     void on_frame_sync() override;
 
+    /* For tests: the detector state the frame handler drives. Reading it is how
+     * "this frame took a measurement" is established without a radio. */
+    const fpv::Scanner& scanner() const { return scanner_; }
+
    private:
     void update_texts();
     void beep(uint32_t hz, uint32_t duration_ms);
@@ -243,8 +249,8 @@ class FpvDetectView : public ui::View {
     };
 
     ui::Labels notes_{
-        {{0, 236}, "Level: ReceiverModel channel", ui::Color::grey()},
-        {{0, 252}, "dBFS (mean), not M4 peak.", ui::Color::grey()},
+        {{0, 236}, "Level: radio RMS over the", ui::Color::grey()},
+        {{0, 252}, "750 kHz capture, not M4 peak.", ui::Color::grey()},
         {{0, 272}, "5.8 GHz: near B200 ceiling.", ui::Color::grey()},
         {{0, 288}, "Untested on air - no radio.", ui::Color::yellow()},
     };
