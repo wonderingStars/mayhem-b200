@@ -540,7 +540,10 @@ TEST(ais_panel_provider_publishes_a_table_when_the_app_is_open) {
     const std::string panel = remote::AppBridge::instance().panel_json();
 
     CHECK(panel_contains(panel, "\"app_id\":\"ais\""));
-    CHECK(panel_contains(panel, "\"panel_kind\":\"table\""));
+    /* Upgraded from "table" to "geotable" (provider_ais.cpp): the table half is
+     * unchanged and the ship markers are a strict addition beside it, so the
+     * columns and rows assertions below still hold verbatim. */
+    CHECK(panel_contains(panel, "\"panel_kind\":\"geotable\""));
     CHECK(panel_contains(panel, "\"columns\":[\"MMSI\",\"Name/Call\"]"));
     /* No device, so no ships: an empty rows array, not a fabricated row. */
     CHECK(panel_contains(panel, "\"rows\":[]"));
@@ -563,8 +566,9 @@ TEST(ais_panel_provider_survives_the_operator_drilling_into_a_sub_view) {
 
     /* Still the ship list. Without NavigationView::at_depth() this would be a
      * PanelKind::Screen and the browser would go blank for as long as the
-     * operator left the map open. */
-    CHECK(panel_contains(panel, "\"panel_kind\":\"table\""));
+     * operator left the map open. (Kind upgraded from "table" to "geotable";
+     * the columns are unchanged.) */
+    CHECK(panel_contains(panel, "\"panel_kind\":\"geotable\""));
     CHECK(panel_contains(panel, "\"columns\":[\"MMSI\",\"Name/Call\"]"));
 }
 
@@ -572,10 +576,15 @@ TEST(ais_panel_provider_says_so_honestly_when_the_app_is_not_on_the_stack) {
     ProviderHarness h;
     h.launch("ais");
 
-    /* Popped on the device rather than through request_home(), so the bridge
-     * still believes ais is current while AISAppView has gone. The provider has
-     * to report that rather than serve an empty table that reads as "AIS RX is
-     * running and hearing nothing". */
+    /* Popped on the device rather than through request_home() -- the path a
+     * remote key press takes, which never goes near the launch queue.
+     * AppBridge::refresh() derives the current app from the navigation stack,
+     * so with the view gone the truthful answer is Home: not this app's data,
+     * and not this app's name over an empty version of it. Before that
+     * derivation the bridge went on believing the app was current and the
+     * provider's own "... is not the open app." guard is what answered here.
+     * That guard is still in the provider; the bridge simply no longer asks a
+     * provider about an app that is not on the stack. */
     h.nav.pop_to_root();
     h.nav.service();
     CHECK_EQ(h.nav.depth(), size_t{1});
@@ -584,7 +593,9 @@ TEST(ais_panel_provider_says_so_honestly_when_the_app_is_not_on_the_stack) {
     const std::string panel = remote::AppBridge::instance().panel_json();
 
     CHECK(panel_contains(panel, "\"panel_kind\":\"screen\""));
-    CHECK(panel_contains(panel, "AIS RX is not the open app."));
+    CHECK(panel_contains(panel, "Home -- no app is open."));
+    /* The stale id is what this change fixed; pin it, not just the text. */
+    CHECK(panel_contains(panel, "\"app_id\":\"\""));
     CHECK(!panel_contains(panel, "\"columns\""));
 }
 
@@ -633,6 +644,8 @@ TEST(ble_panel_provider_says_so_honestly_when_the_app_is_not_on_the_stack) {
     const std::string panel = remote::AppBridge::instance().panel_json();
 
     CHECK(panel_contains(panel, "\"panel_kind\":\"screen\""));
-    CHECK(panel_contains(panel, "BLE RX is not the open app."));
+    CHECK(panel_contains(panel, "Home -- no app is open."));
+    /* The stale id is what this change fixed; pin it, not just the text. */
+    CHECK(panel_contains(panel, "\"app_id\":\"\""));
     CHECK(!panel_contains(panel, "\"columns\""));
 }

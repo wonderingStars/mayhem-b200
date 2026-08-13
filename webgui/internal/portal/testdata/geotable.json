@@ -1,0 +1,22 @@
+{
+  "app_name": "AIS Boats",
+  "table": {
+    "columns": ["MMSI", "Name/Call"],
+    "rows": [
+      ["244660320", "EVER GIVEN"],
+      ["235012456", "SOLENT TRADER"],
+      ["232003859", "PW7231"],
+      ["209512000", ""],
+      ["503012340", "COASTAL RANGER"],
+      ["227314000", "MARIE JOSEPHE"]
+    ]
+  },
+  "map": {
+    "markers": [
+      { "lat": 50.7712, "lon": -1.2984, "label": "EVER GIVEN", "heading_deg": 96, "kind": "vessel" },
+      { "lat": 50.8021, "lon": -1.1147, "label": "SOLENT TRADER", "heading_deg": 271, "kind": "vessel" },
+      { "lat": 50.7433, "lon": -1.2001, "label": "PW7231", "kind": "vessel" },
+      { "lat": 50.8194, "lon": -1.3316, "label": "COASTAL RANGER", "heading_deg": 12, "kind": "vessel" }
+    ]
+  }
+}

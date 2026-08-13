@@ -164,12 +164,33 @@ class View : public Widget {
 
     virtual std::string title() const;
 
+    /* The registry id of the app this view IS, or "" for anything else — a
+     * menu, or a sub-view an app pushed on top of itself.
+     *
+     * Set once by app::AppRegistry::add()'s factory wrapper, so every push
+     * site records it without knowing it has to. The web portal reads it back
+     * off the navigation stack to name the app the operator is actually in:
+     * a remote key press navigates the device exactly as the local encoder
+     * does, so the portal cannot assume it launched what is on screen, and
+     * naming the wrong app puts one app's data under another app's title.
+     *
+     * It lives on the view rather than in a side table keyed by pointer
+     * because that identity has to die with the view. A freed app view's
+     * address is reused by whatever is allocated next — including a sub-view
+     * of a different app — and a side table would then answer with the dead
+     * app's name for a live view belonging to someone else. */
+    const std::string& app_id() const { return app_id_; }
+    void set_app_id(std::string registry_id) { app_id_ = std::move(registry_id); }
+
     /* Propagates a per-frame tick to the whole subtree. */
     void on_frame_sync() override;
 
    protected:
     std::vector<Widget*> children_{};
     void invalidate_child(Widget* const widget);
+
+   private:
+    std::string app_id_{};
 };
 
 class Rectangle : public Widget {
@@ -390,6 +411,19 @@ class Console : public Widget {
     void writeln(std::string_view message);
     void enable_scrolling(bool enable);
     void set_max_lines(size_t n) { max_lines_ = n; }
+
+    /* Read-only access to the log, for the web portal's console panel providers
+     * (src/remote/provider_pocsag.cpp and friends). The four text decoders keep
+     * their decoded output in a Console and nowhere else, so this is the only
+     * way to publish it without changing how an app produces it.
+     *
+     * pending() matters as much as lines(): write() only commits a line on '\n'
+     * or at the wrap column, so a decoder that emits a short message with
+     * write() rather than writeln() — POCSAG's message body does exactly that —
+     * leaves that message sitting here. paint() draws it as the last line, so a
+     * reader that skips it silently loses text that is on the screen. */
+    const std::deque<std::string>& lines() const { return lines_; }
+    const std::string& pending() const { return pending_; }
 
     void paint(Painter& painter) override;
     void on_show() override;

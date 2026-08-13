@@ -1613,6 +1613,12 @@ class PocsagAppView : public ui::View {
     void handle_packet(const pocsag::POCSAGPacket& packet);
     bool ignore_address(uint32_t address) const;
 
+    /* Read-only, for src/remote/provider_pocsag.cpp — the same idiom as
+     * AprsTableView::entries() (ui_aprs_rx.hpp). The decoded pages exist only
+     * in this console, and a panel provider handed a ui::View& cannot reach a
+     * private member. */
+    const ui::Console& console() const { return console_; }
+
    private:
     void refresh_ui();
     void reconfigure_dsp();

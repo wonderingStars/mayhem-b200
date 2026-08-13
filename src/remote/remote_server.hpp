@@ -20,10 +20,28 @@
  *   POST /api/apps/home             queue: pop to root
  *   GET  /api/panel                 current PanelData as JSON
  *   GET  /api/status                device label, receiving/transmitting, levels
+ *   GET  /api/screen                one framebuffer frame (binary, see below)
+ *   POST /api/input                 queue key/encoder/touch/char events
  *
  * Every handler reads through remote::AppBridge, never app::globals()
  * directly — see app_bridge.hpp's file header for the thread-safety
  * contract that rests on.
+ *
+ * GET /api/screen is the exception to "no long-lived requests": with
+ * ?after=SEQ&wait_ms=MS it holds the connection open until a frame newer than
+ * SEQ exists or MS milliseconds (capped at 10000) pass, answering 204 on
+ * timeout and 204 when nothing has been captured at all yet. Blocking is
+ * affordable because each connection already owns its thread; stop() releases
+ * anyone still waiting so shutdown does not stall behind a 10-second poll.
+ * The 200 body is application/octet-stream with a 16-byte header — the layout
+ * is written out once, next to the constants that encode it, in
+ * app_bridge.hpp.
+ *
+ * POST /api/input is remote CONTROL, not just remote viewing: an event posted
+ * here reaches app::EventDispatcher exactly as a local keypress does, so a
+ * client on the LAN can drive any app, transmit apps included. That is the
+ * same trust boundary as the rest of this server (see start()), but it is a
+ * materially larger consequence of it.
  *
  * Copyright (C) 2026 mayhem-b200 contributors
  * SPDX-License-Identifier: GPL-2.0-or-later
@@ -87,17 +105,33 @@ class RemoteServer {
      * thread. Returns false and sets last_error() on failure. No-op (returns
      * false) if already running.
      *
-     * There is no authentication: this is a LAN control surface for the
-     * radio sitting next to it, the same trust boundary as opening a
-     * terminal on the machine running mayhem-b200. Do not expose the port
-     * past a trusted network. */
+     * There is no authentication, and since POST /api/input landed this is
+     * full remote control of the radio — transmit apps included — not a
+     * read-only view of it. Do not expose the port past a trusted network.
+     *
+     * It is weaker than "a terminal on this machine", which is how this
+     * paragraph used to describe it, and the difference matters because it
+     * is not about the network at all. read_request() consults only
+     * Content-Length and ignores Content-Type, and every response carries
+     * Access-Control-Allow-Origin: *. A POST with a CORS-"simple" content
+     * type therefore needs no preflight, so ANY page the operator's browser
+     * happens to load can drive this API at 127.0.0.1 without the port being
+     * reachable from anywhere. (Chrome's private-network-access preflight
+     * blunts the public-page->loopback case on recent versions; a page served
+     * from the LAN, or from localhost, has no such barrier.) CORS stops that
+     * page READING the reply; it does not stop the key press landing.
+     *
+     * Closing that would mean requiring a preflight-triggering header on
+     * /api/input, which contract 2 does not specify — deliberately left
+     * as a documented exposure rather than changed unilaterally. */
     bool start(uint16_t port);
 
     /* Stops accepting new connections and joins the accept thread. Requests
      * already being handled on their own worker threads are left to finish
      * on their own (each has a bounded receive timeout, see
-     * remote_server.cpp, so none can hang forever). Safe to call when not
-     * running. */
+     * remote_server.cpp, so none can hang forever); a /api/screen long poll
+     * is additionally woken here rather than left to run out its wait. Safe
+     * to call when not running. */
     void stop();
 
     bool running() const { return running_.load(); }

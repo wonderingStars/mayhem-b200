@@ -972,6 +972,11 @@ class SstvImage : public ui::Widget {
     /* `rgb` is 320 interleaved RGB triples; it is scaled to the widget width. */
     void set_line(uint16_t line, const uint8_t* rgb);
 
+    /* Read-only view of the received picture, for src/remote/provider_sstv.cpp
+     * to publish to the web portal. Const by design: the portal only ever
+     * reads. Same idiom as AprsTableView::entries() (ui_aprs_rx.hpp). */
+    const std::vector<ui::Color>& pixels() const { return pixels_; }
+
     void paint(ui::Painter& painter) override;
 
    private:
@@ -993,6 +998,11 @@ class SstvRxView : public ui::View {
     void on_show() override;
     void on_hide() override;
     void on_frame_sync() override;
+
+    /* Read-only view of the received picture, for src/remote/provider_sstv.cpp
+     * to publish to the web portal. Const by design: the portal only ever
+     * reads. */
+    const SstvImage& image() const { return image_; }
 
    private:
     void rebuild_chain();

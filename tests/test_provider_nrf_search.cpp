@@ -415,10 +415,15 @@ TEST(nrf_panel_provider_says_so_honestly_when_the_app_is_not_on_the_stack) {
     ProviderHarness h;
     h.launch("nrf_rx");
 
-    /* Popped on the device rather than through request_home(), so the bridge
-     * still believes nrf_rx is current while NrfRxView has gone. The provider
-     * has to report that rather than serve an empty table that reads as "NRF
-     * RX is running and hearing nothing". */
+    /* Popped on the device rather than through request_home() -- the path a
+     * remote key press takes, which never goes near the launch queue.
+     * AppBridge::refresh() derives the current app from the navigation stack,
+     * so with the view gone the truthful answer is Home: not this app's data,
+     * and not this app's name over an empty version of it. Before that
+     * derivation the bridge went on believing the app was current and the
+     * provider's own "... is not the open app." guard is what answered here.
+     * That guard is still in the provider; the bridge simply no longer asks a
+     * provider about an app that is not on the stack. */
     h.nav.pop_to_root();
     h.nav.service();
     CHECK_EQ(h.nav.depth(), size_t{1});
@@ -427,7 +432,9 @@ TEST(nrf_panel_provider_says_so_honestly_when_the_app_is_not_on_the_stack) {
     const std::string panel = remote::AppBridge::instance().panel_json();
 
     CHECK(panel_contains(panel, "\"panel_kind\":\"screen\""));
-    CHECK(panel_contains(panel, "NRF RX is not the open app."));
+    CHECK(panel_contains(panel, "Home -- no app is open."));
+    /* The stale id is what this change fixed; pin it, not just the text. */
+    CHECK(panel_contains(panel, "\"app_id\":\"\""));
     CHECK(!panel_contains(panel, "\"columns\""));
 }
 
@@ -473,7 +480,9 @@ TEST(search_panel_provider_says_so_honestly_when_the_app_is_not_on_the_stack) {
     const std::string panel = remote::AppBridge::instance().panel_json();
 
     CHECK(panel_contains(panel, "\"panel_kind\":\"screen\""));
-    CHECK(panel_contains(panel, "Search is not the open app."));
+    CHECK(panel_contains(panel, "Home -- no app is open."));
+    /* The stale id is what this change fixed; pin it, not just the text. */
+    CHECK(panel_contains(panel, "\"app_id\":\"\""));
     CHECK(!panel_contains(panel, "\"columns\""));
 }
 

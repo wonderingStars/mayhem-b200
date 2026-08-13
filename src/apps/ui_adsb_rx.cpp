@@ -395,6 +395,12 @@ void AdsbDemod::reset() {
     byte_ = 0;
     for (size_t i = 0; i <= kPreambleLength; i++) shifter_[i] = 0.0f;
 
+    /* A partial boxcar belongs to the samples before the gap. Averaging it
+     * with the ones after would build one output sample out of two moments —
+     * the same splice the preamble detector must never be shown. */
+    decim_acc_ = dsp::cfloat{0.0f, 0.0f};
+    decim_n_ = 0;
+
     resampler_.reset();
     mag_scratch_.clear();
 
@@ -422,10 +428,11 @@ void AdsbDemod::update_noise_floor(const float* mags, size_t count) {
     if (count == 0) return;
 
     /* The median, not the mean: a burst inside the block must not lift the
-     * floor it is being measured against. At 2 Msps a 112-bit frame is 120 us,
-     * 6% of the 4096-sample window the app hands over, and the mean climbs
-     * with every frame received; the median does not move until half the block
-     * is signal. Strided so the cost is bounded whatever the block size. */
+     * floor it is being measured against. A 112-bit frame is 120 us, well
+     * under 1% of the ~16 ms of air one pump now hands over, and the mean
+     * climbs with every frame received; the median does not move until half
+     * the block is signal. Strided so the cost is bounded whatever the block
+     * size — which now varies with both the sample rate and the frame time. */
     const size_t stride = ((count + kNoiseFloorTaps - 1) / kNoiseFloorTaps);
 
     noise_scratch_.clear();
@@ -456,17 +463,55 @@ void AdsbDemod::set_input_rate(double hz) {
     if (hz == input_rate_) return;
 
     input_rate_ = hz;
-    resampler_.set_rate(hz, kNativeSampleRate);
+
+    /* Whole multiples of the native rate go through the complex boxcar, which
+     * filters as well as decimates; only the leftover fraction reaches the
+     * magnitude interpolator. 8 Msps: decimate by 4, interpolator bypasses.
+     * 2.4 Msps: decimate by 1, interpolator does all of it, exactly as before.
+     * 5 Msps: decimate by 2 to 2.5, then interpolate. */
+    decim_ = 1;
+    const double ratio = hz / kNativeSampleRate;
+    if (ratio >= 2.0) {
+        /* A shade of slack so a rate that IS an exact multiple cannot land one
+         * ULP low and decimate by one less than it should. */
+        decim_ = static_cast<size_t>(std::floor(ratio + 1e-9));
+    }
+
+    decim_acc_ = dsp::cfloat{0.0f, 0.0f};
+    decim_n_ = 0;
+
+    resampler_.set_rate(hz / static_cast<double>(decim_), kNativeSampleRate);
 }
 
 void AdsbDemod::process(const dsp::cfloat* samples, size_t count, const FrameHandler& on_frame) {
     mag_raw_.clear();
-    mag_raw_.reserve(count);
 
-    for (size_t i = 0; i < count; i++) {
-        const float re = samples[i].real();
-        const float im = samples[i].imag();
-        mag_raw_.push_back((re * re) + (im * im));
+    if (decim_ > 1) {
+        /* Average the complex samples over each output period, then square.
+         * Doing it in this order is the whole point — see input_decimation()
+         * in the header. The accumulator carries across calls, so chunking the
+         * stream does not move where the boxcar boundaries fall. */
+        mag_raw_.reserve((count / decim_) + 1);
+
+        const float inv = 1.0f / static_cast<float>(decim_);
+        for (size_t i = 0; i < count; i++) {
+            decim_acc_ += samples[i];
+            if (++decim_n_ < decim_) continue;
+
+            const float re = decim_acc_.real() * inv;
+            const float im = decim_acc_.imag() * inv;
+            mag_raw_.push_back((re * re) + (im * im));
+
+            decim_acc_ = dsp::cfloat{0.0f, 0.0f};
+            decim_n_ = 0;
+        }
+    } else {
+        mag_raw_.reserve(count);
+        for (size_t i = 0; i < count; i++) {
+            const float re = samples[i].real();
+            const float im = samples[i].imag();
+            mag_raw_.push_back((re * re) + (im * im));
+        }
     }
 
     /* Measure before scaling: the floor is a property of the input, not of the
@@ -1153,8 +1198,72 @@ void AdsbRxDetailsView::refresh_ui() {
 /* --- AdsbRxView ------------------------------------------------------------ */
 
 namespace {
-/* The whole spectrum tap; see AdsbRxView::pump(). */
+
+/* Fallback block size, used only if the gapless tap could not be opened. The
+ * whole spectrum snapshot, as this app polled before the migration. */
 constexpr size_t kPumpSamples = 4096;
+
+/* How much air the tap must hold. A UI frame is 16 ms; 250 ms is ~15 frames of
+ * slack, which covers the hitches a desktop takes (a map tile decode, a window
+ * resize) without pretending to survive a hang. Left at the tap's own default
+ * deliberately — this app has no reason to want a different one, and saying so
+ * here would be a second constant to keep in step. */
+constexpr double kTapSeconds = radio::RawSampleTap::kDefaultHistorySeconds;
+
+std::string format_rate(double hz) {
+    if (!(hz > 0.0)) return "-";
+    return to_string_decimal(static_cast<float>(hz / 1e6), 2) + "M";
+}
+
+}  // namespace
+
+radio::RatePreference AdsbRxView::rate_preference() {
+    radio::RatePreference want;
+
+    /* Mode S is 1 Mbit/s pulse-position modulation, so the bit machine needs
+     * two samples per bit and cannot work below 2 Msps at all. */
+    want.minimum_hz = adsb::AdsbDemod::kNativeSampleRate;
+
+    /* Eight samples per bit. The gain is not in the bit decisions — those are
+     * still made at 2 Msps after the decimator — but in where the pulse edges
+     * land: a 0.5 us pulse is resolved on a 1/8 us grid instead of a 1/2 us
+     * one, so a burst that arrives out of phase with the sampling clock loses
+     * far less contrast, and the boxcar averages four samples of noise into
+     * each one the detector sees. */
+    want.ideal_hz = 4.0 * adsb::AdsbDemod::kNativeSampleRate;
+
+    /* Past 8 Msps there is nothing left to buy. The pulse edge is already
+     * resolved to an eighth of its own width, and the extra bandwidth is real
+     * cost: 16 Msps is 128 MB/s through the tap and twice the USB traffic, on
+     * a bus this radio shares with nothing else. */
+    want.max_useful_hz = 4.0 * adsb::AdsbDemod::kNativeSampleRate;
+
+    /* Whole multiples of the native rate keep the decimator exact and let the
+     * magnitude interpolator bypass entirely, so no sample is ever built by
+     * interpolating between two others. */
+    want.prefer_multiple_of_hz = adsb::AdsbDemod::kNativeSampleRate;
+
+    return want;
+}
+
+namespace {
+
+/* The rate to ask the receiver for: the best the CONNECTED radio can do within
+ * what ADS-B actually needs, rather than the 2 Msps constant that was sized for
+ * a PortaPack. A B200 gives 8 Msps, an RTL-SDR 2, and a device that cannot
+ * reach 2 at all still gets its own closest rate — the app then decodes badly
+ * instead of not at all, and says so on screen. */
+double preferred_sampling_rate() {
+    const auto want = AdsbRxView::rate_preference();
+
+    if (auto* r = globals().radio)
+        return radio::choose_rx_rate(r->caps(), want).rate_hz;
+
+    /* No radio object at all: choose_rx_rate on an empty DeviceCaps hands back
+     * the ideal, which is the right thing to have configured if one appears. */
+    return radio::choose_rx_rate(radio::DeviceCaps{}, want).rate_hz;
+}
+
 }  // namespace
 
 AdsbRxView::AdsbRxView()
@@ -1168,7 +1277,8 @@ AdsbRxView::AdsbRxView()
                   &check_log_,
                   &text_status_,
                   &recent_view_,
-                  &tap_note_});
+                  &text_tap_,
+                  &text_air_});
 
     /* Below the two control rows, above the two-line note at the bottom. */
     recent_view_.set_parent_rect({0, 44, ui::screen_width, 228});
@@ -1198,7 +1308,14 @@ AdsbRxView::AdsbRxView()
 }
 
 AdsbRxView::~AdsbRxView() {
-    /* The receive stream is left running, as the other RX apps do. */
+    /* The receive stream is left running, as the other RX apps do — but the
+     * gapless tap is not. Nothing would drain it once this view is gone, so it
+     * would fill once and then sit there costing the DSP thread a 128 MB/s
+     * copy at 16 Msps for no reader at all. Closed here rather than in
+     * on_hide(), which also runs when this view merely pushes its own details
+     * page on top of itself and keeps decoding underneath it. */
+    if (receiver_) receiver_->disable_raw_tap();
+
     if (log_file_) log_file_->flush();
 }
 
@@ -1212,30 +1329,65 @@ void AdsbRxView::on_show() {
     receiver_ = globals().receiver;
     if (!receiver_) return;
 
-    /* ADS-B is a fixed service: 1090 MHz, 2 Msps, no demodulator in the audio
-     * chain — this app does its own. */
+    /* ADS-B is a fixed service: 1090 MHz, no demodulator in the audio chain —
+     * this app does its own. The rate is not fixed: it comes from what the
+     * attached radio can actually do. */
     receiver_->set_mode(radio::ReceiverModel::Mode::SpectrumAnalysis);
-    receiver_->set_sampling_rate(adsb::AdsbDemod::kNativeSampleRate);
+    receiver_->set_sampling_rate(preferred_sampling_rate());
     receiver_->set_target_frequency(kFrequency);
     if (!receiver_->running()) receiver_->start();
 
+    /* Subscribe after start(), which is where the tap is sized from the rate
+     * the hardware actually accepted. Guarded because on_show() runs again
+     * every time the details or map view is popped back off, and re-opening
+     * would throw away whatever had arrived in the meantime and report it,
+     * correctly but pointlessly, as a gap. */
+    if (!receiver_->raw_tap_enabled()) receiver_->enable_raw_tap(kTapSeconds);
+
     demod_.set_input_rate(receiver_->sampling_rate());
     field_gain_.set_value(static_cast<int32_t>(receiver_->gain()), false);
+    refresh_status();
 }
 
 void AdsbRxView::pump() {
     if (!receiver_) return;
-    if (!receiver_->take_spectrum_samples(samples_, kPumpSamples)) return;
-    if (samples_.empty()) return;
 
     demod_.set_input_rate(receiver_->sampling_rate());
 
-    /* Successive snapshots are not adjacent in time — the DSP thread has run
-     * on between them — so carrying demodulator state across the seam would
-     * let a splice fabricate a preamble and steal the real one that follows.
-     * Start each window clean; a burst cut in half by the gap was lost either
-     * way. */
-    demod_.reset();
+    if (receiver_->raw_tap_enabled()) {
+        const auto block = receiver_->raw_tap().read(samples_);
+
+        if (block.lost_before != 0) {
+            /* The stream really broke: the machine did not drain the tap in
+             * time and samples were discarded. Everything the demodulator is
+             * holding — the 17-sample preamble history, a half-decoded frame,
+             * the decimator's partial average — refers to samples that are not
+             * adjacent to these. Carrying it across would do worse than lose
+             * the interrupted frame: a spliced history can satisfy the
+             * preamble template and fabricate a burst, and a frame left
+             * mid-decode would swallow the first bits of the next real one.
+             *
+             * So reset, but only here. Under the old snapshot tap every block
+             * was a splice and this ran 60 times a second, which is precisely
+             * what made a frame straddling two blocks unrecoverable. */
+            samples_lost_ += block.lost_before;
+            gaps_++;
+            demod_.reset();
+        }
+
+        if (block.samples == 0) return;
+    } else {
+        /* No gapless tap — nothing opened it, or it could not be. Fall back to
+         * the snapshot every other decoder still uses, which means resetting
+         * per block again, because successive snapshots are not adjacent in
+         * time. Degraded, not broken, and the status line says which one is in
+         * force. */
+        if (!receiver_->take_spectrum_samples(samples_, kPumpSamples)) return;
+        if (samples_.empty()) return;
+        demod_.reset();
+    }
+
+    samples_decoded_ += samples_.size();
 
     demod_.process(samples_.data(), samples_.size(),
                    [this](const adsb::AdsbFrame& f, float amp) {
@@ -1285,12 +1437,58 @@ void AdsbRxView::on_frame_sync() {
 void AdsbRxView::refresh_status() {
     if (!log_error_.empty()) {
         text_status_.set(log_error_);
+    } else {
+        text_status_.set("Ok:" + to_string_dec_uint(tracker_.frames_accepted()) +
+                         " Raw:" + to_string_dec_uint(tracker_.frames_seen()) +
+                         " AC:" + to_string_dec_uint(static_cast<uint64_t>(recent_.size())));
+    }
+
+    refresh_tap_status();
+}
+
+void AdsbRxView::refresh_tap_status() {
+    if (!receiver_) {
+        text_tap_.set("No radio.");
+        text_air_.set("");
         return;
     }
 
-    text_status_.set("Ok:" + to_string_dec_uint(tracker_.frames_accepted()) +
-                     " Raw:" + to_string_dec_uint(tracker_.frames_seen()) +
-                     " AC:" + to_string_dec_uint(static_cast<uint64_t>(recent_.size())));
+    /* Line 1: which tap, at what rate, and how the rate is being brought back
+     * to the demodulator's native 2 Msps. The rate is chosen from the radio's
+     * caps and so is not knowable from the source. */
+    const double rate = receiver_->sampling_rate();
+    std::string tap = gapless() ? "Gapless " : "Snapshot ";
+    tap += format_rate(rate);
+
+    const size_t decim = demod_.input_decimation();
+    if (decim > 1) tap += " /" + to_string_dec_uint(static_cast<uint64_t>(decim));
+
+    text_tap_.set(tap);
+
+    /* Line 2: the number the old fixed note guessed at. "Air" is the fraction
+     * of the samples the radio delivered that actually reached the
+     * demodulator, so the snapshot path's ~12% and a struggling gapless tap
+     * are on the same scale and directly comparable. Gaps are counted
+     * separately from samples because one long stall and a thousand small ones
+     * are different problems. */
+    if (!gapless()) {
+        /* The snapshot hands over a fixed 4096 samples per UI frame whatever
+         * the rate, and there is no counter for what it overwrote in between,
+         * so this is arithmetic, not a measurement — and it is labelled as an
+         * estimate for exactly that reason. */
+        const double duty = (rate > 0.0) ? (static_cast<double>(kPumpSamples) * 60.0 / rate) : 0.0;
+        text_air_.set("Air ~" + to_string_decimal(static_cast<float>(duty * 100.0), 1) +
+                      "% (no tap)");
+        return;
+    }
+
+    std::string air = "Air " +
+                      to_string_decimal(static_cast<float>(air_fraction() * 100.0), 1) + "%";
+    if (samples_lost_ != 0) {
+        air += " lost " + to_string_dec_uint(samples_lost_) +
+               " in " + to_string_dec_uint(gaps_);
+    }
+    text_air_.set(air);
 }
 
 void AdsbRxView::set_logging(bool enabled) {

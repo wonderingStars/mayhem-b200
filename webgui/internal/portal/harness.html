@@ -33,7 +33,7 @@
     gap: 10px;
   }
   header h1 { font-size: 14px; margin: 0; }
-  header .sub { font-size: 11px; color: var(--mp-text-faint); }
+  header .sub { font-size: 11px; color: var(--mp-text-dim); }
   .layout { flex: 1; display: flex; min-height: 0; }
   nav {
     width: 220px;
@@ -59,10 +59,10 @@
   nav button:hover { border-color: var(--mp-accent-dim); }
   nav button.mp-btn-active { background: linear-gradient(180deg, var(--mp-accent), var(--mp-accent-dim)); color: #04140f; border-color: var(--mp-accent-dim); font-weight: 600; }
   nav .sep { height: 1px; background: var(--mp-border); margin: 6px 0; }
-  nav .hint { font-size: 10.5px; color: var(--mp-text-faint); line-height: 1.4; }
+  nav .hint { font-size: 10.5px; color: var(--mp-text-dim); line-height: 1.4; }
   .sim-row { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--mp-text-dim); margin-top: 4px; }
   main { flex: 1; min-width: 0; display: flex; flex-direction: column; padding: 14px; gap: 8px; }
-  #status { font-size: 11px; color: var(--mp-text-faint); font-family: var(--mp-mono); }
+  #status { font-size: 11px; color: var(--mp-text-dim); font-family: var(--mp-mono); }
   #stage { flex: 1; min-height: 0; border: 1px dashed var(--mp-border); border-radius: 8px; padding: 10px; }
   #panelHost { height: 100%; }
 </style>
@@ -88,8 +88,21 @@
     <button data-fixture="spectrum_idle" data-kind="spectrum">spectrum (idle)</button>
     <button data-fixture="receiver" data-kind="receiver">receiver</button>
     <button data-fixture="console" data-kind="console">console</button>
+    <!-- The C++ backend's own ConsoleData shape: bare strings, no seq, no
+         ts_ms (src/remote/app_data.cpp's to_json(ConsoleData)). A separate
+         button for the same reason as the table's: console.js has to draw
+         both shapes, and only this one proves the normalizer works -- and
+         that no timestamp is invented for lines that have none. -->
+    <button data-fixture="console_backend" data-kind="console">console (C++ backend shape)</button>
     <button data-fixture="map" data-kind="map">map</button>
     <button data-fixture="adsb" data-kind="adsb">adsb (live traffic)</button>
+    <button data-fixture="image" data-kind="image">image (decoded frame)</button>
+    <!-- Click "image" first, then this: same rev with data_b64 omitted is what
+         the backend sends once the client reports the rev it already has, and
+         the panel must keep the picture rather than blanking. -->
+    <button data-fixture="image_cached" data-kind="image">image (same rev, no data_b64)</button>
+    <button data-fixture="image_none" data-kind="image">image (nothing decoded)</button>
+    <button data-fixture="geotable" data-kind="geotable">geotable (map + table)</button>
     <button data-fixture="screen" data-kind="screen">screen (fallback card)</button>
     <button data-fixture="table" data-kind="bogus_kind">unregistered kind →fallback</button>
     <div class="sep"></div>
@@ -123,6 +136,8 @@
 <script src="server/static/panels/console.js"></script>
 <script src="server/static/panels/map.js"></script>
 <script src="server/static/panels/adsb.js"></script>
+<script src="server/static/panels/image.js"></script>
+<script src="server/static/panels/geotable.js"></script>
 <script src="server/static/panels/screen.js"></script>
 <script>
 (() => {
@@ -171,6 +186,7 @@
     currentKind = kind;
     currentFixture = fixture;
     tick = 0;
+    imageStash = null; // never carry one fixture's pixels into another's ticks
     renderNow();
     setStatus(`loaded testdata/${fixture}.json as panel_kind "${kind}" (registered kinds: ${window.MayhemPanels.kinds().join(", ")})`);
   }
@@ -263,6 +279,58 @@
     currentData.lines = lines;
   }
 
+  // The backend's flat console shape has no seq and no ts_ms, and ui::Console
+  // pops the FRONT of its deque once max_lines is reached
+  // (src/ui/ui_widget.cpp), so the array a poll returns is a sliding window,
+  // not a growing log. The tiny cap here makes that window slide within a few
+  // ticks, which is the case a positional dedupe gets wrong: if new lines stop
+  // appearing after the buffer first fills, the normalizer is deduping by
+  // index instead of by content.
+  const FLAT_CONSOLE_CAP = 8;
+  function simulateConsoleBackend() {
+    const lines = currentData.lines || [];
+    lines.push(`tick ${tick} ` + CONSOLE_MESSAGES[tick % CONSOLE_MESSAGES.length]);
+    while (lines.length > FLAT_CONSOLE_CAP) lines.shift();
+    currentData.lines = lines;
+  }
+
+  // Alternates between "here is the image" and "you already have rev N, so no
+  // data_b64" -- the two states the have_image_rev negotiation really produces.
+  // The panel must keep showing the picture through the omitted ticks.
+  let imageStash = null;
+  function simulateImage() {
+    if (currentData.data_b64) {
+      imageStash = currentData.data_b64;
+      delete currentData.data_b64;
+      currentData.note = "unchanged since rev " + currentData.rev;
+    } else if (imageStash) {
+      currentData.data_b64 = imageStash;
+      delete currentData.note;
+    }
+  }
+
+  // Drifts the located contacts and, every few ticks, gives one of the
+  // entries that has no position fix its first one -- the transition the
+  // "N of M located" readout exists to make visible. Entries without a fix
+  // stay in the table and off the map, which is the rule the panel is for.
+  const LATE_FIXES = [
+    { row: 3, marker: { lat: 50.7601, lon: -1.0955, label: "209512000", kind: "vessel" } },
+    { row: 5, marker: { lat: 50.8320, lon: -1.2402, label: "MARIE JOSEPHE", heading_deg: 208, kind: "vessel" } },
+  ];
+  function simulateGeotable() {
+    const markers = (currentData.map && currentData.map.markers) || [];
+    markers.forEach((m, i) => {
+      m.lat += Math.sin(tick / 5 + i) * 0.0008;
+      m.lon += Math.cos(tick / 5 + i) * 0.0008;
+      if (Number.isFinite(m.heading_deg)) m.heading_deg = (m.heading_deg + 3) % 360;
+    });
+    const promote = LATE_FIXES[Math.floor(tick / 4) - 1];
+    if (tick % 4 === 0 && promote && !markers.some((m) => m.label === promote.marker.label)) {
+      markers.push(Object.assign({}, promote.marker));
+    }
+    if (currentData.map) currentData.map.markers = markers;
+  }
+
   function simulateMap() {
     (currentData.markers || []).forEach((m, i) => {
       m.lat += Math.sin(tick / 5 + i) * 0.0006;
@@ -303,8 +371,11 @@
     else if (currentFixture === "spectrum_active") simulateSpectrum();
     else if (currentFixture === "receiver") simulateReceiver();
     else if (currentFixture === "console") simulateConsole();
+    else if (currentFixture === "console_backend") simulateConsoleBackend();
     else if (currentFixture === "map") simulateMap();
     else if (currentFixture === "adsb") simulateAdsb();
+    else if (currentFixture === "image") simulateImage();
+    else if (currentFixture === "geotable") simulateGeotable();
     renderNow();
     setStatus(`simulated tick ${tick} for "${currentFixture}"`);
   }

@@ -1068,6 +1068,12 @@ class TetraRxView : public ui::View {
     void on_hide() override;
     void on_frame_sync() override;
 
+    /* Read-only, for src/remote/provider_tetra.cpp — the same idiom as
+     * AprsTableView::entries() (ui_aprs_rx.hpp). The decoded signalling lines
+     * exist only in this console, and a panel provider handed a ui::View&
+     * cannot reach a private member. */
+    const ui::Console& console() const { return console_; }
+
    private:
     void rebuild_channel_filter();
     void on_sync_burst(const tetra::SyncBurst& burst);

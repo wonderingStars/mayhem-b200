@@ -66,7 +66,14 @@ func (e *Error) Unavailable() bool { return e.Status == 0 }
 // use.
 type Client struct {
 	baseURL    string
+	timeout    time.Duration
 	httpClient *http.Client
+	// pollClient serves the one endpoint whose whole purpose is to block:
+	// the screen long poll (see screen.go), which may legitimately take up
+	// to 10s. It deliberately has no Timeout of its own — Screen bounds each
+	// request with a context deadline derived from the wait it asked for,
+	// which DefaultTimeout cannot express.
+	pollClient *http.Client
 }
 
 // New returns a Client for the app-portal API at baseURL (e.g.
@@ -77,7 +84,9 @@ func New(baseURL string, timeout time.Duration) *Client {
 	}
 	return &Client{
 		baseURL:    strings.TrimRight(baseURL, "/"),
+		timeout:    timeout,
 		httpClient: &http.Client{Timeout: timeout},
+		pollClient: &http.Client{},
 	}
 }
 
@@ -121,9 +130,20 @@ func (c *Client) Home(ctx context.Context) (CurrentApp, error) {
 
 // Panel fetches whatever structured data the currently active app has
 // published for display, if any (see Panel.HasData).
-func (c *Client) Panel(ctx context.Context) (Panel, error) {
+//
+// haveImageRev is contract 4's cache token for the image panel: the revision
+// of the image the caller already holds, so the backend can omit an
+// unchanged multi-hundred-kilobyte data_b64 blob. It is passed through
+// verbatim as ?have_image_rev= and omitted entirely when empty — the browser
+// is the only thing that knows what it has, and inventing a value here would
+// make the backend skip an image the browser has never seen.
+func (c *Client) Panel(ctx context.Context, haveImageRev string) (Panel, error) {
+	path := "/api/panel"
+	if haveImageRev != "" {
+		path += "?" + url.Values{"have_image_rev": {haveImageRev}}.Encode()
+	}
 	var resp Panel
-	if err := c.do(ctx, "panel", http.MethodGet, "/api/panel", nil, &resp); err != nil {
+	if err := c.do(ctx, "panel", http.MethodGet, path, nil, &resp); err != nil {
 		return Panel{}, err
 	}
 	return resp, nil

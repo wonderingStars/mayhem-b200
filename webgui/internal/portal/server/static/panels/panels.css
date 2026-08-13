@@ -1,48 +1,241 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
 /* Part of mayhem-b200.
 
-   Shared look for every panels/<kind>.js renderer. Same dark palette as
-   internal/web/static/style.css (this product's existing design language),
-   but under --mp-*-prefixed custom properties so this stylesheet can be
-   loaded alongside that one (or the eventual portal shell's own) without
-   either clobbering the other's --bg/--accent/etc. Load this file once;
-   every panel file's classes assume it's present. */
+   Shared look for every panels/<kind>.js renderer: the terminal /
+   amber-phosphor instrument aesthetic from doc/design-ref, built entirely out
+   of the --mp-* design tokens app.css defines. app.css is the source of truth
+   for those tokens and index.html loads it LAST, so everything this file
+   declares in :root below is inert in the portal -- it exists only so
+   cmd/panels-harness, which loads this stylesheet and nothing else, renders
+   the same thing.
 
-:root {
-  --mp-bg: #0a0e14;
-  --mp-panel: #121821;
-  --mp-panel-2: #161e2a;
-  --mp-border: #232d3b;
-  --mp-border-soft: #1a222e;
-  --mp-text: #dde4ee;
-  --mp-text-dim: #8896a8;
-  --mp-text-faint: #5b6b80;
-  --mp-accent: #34d8c3;
-  --mp-accent-dim: #1f8c7f;
-  --mp-accent-2: #5b9dff;
-  --mp-warn: #f5a623;
-  --mp-danger: #ef5464;
-  --mp-ok: #3ddc84;
-  --mp-mono: "Cascadia Mono", "Consolas", "SFMono-Regular", Menlo, monospace;
-  --mp-sans: "Segoe UI", system-ui, -apple-system, "Inter", Roboto, sans-serif;
-  --mp-radius: 8px;
-  --mp-shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 8px 24px -8px rgba(0, 0, 0, 0.6);
+   Three things about this file are structural rather than incidental:
+
+     - Only classes the renderers actually emit are styled. Every selector
+       here was read out of the panels/*.js file that produces it; a
+       plausible-looking class that nothing emits is dead CSS that reads as
+       working.
+     - KIND CLASSES ARE STICKY. Each renderer does classList.add("mp-panel",
+       "mp-<kind>-panel") and nothing removes the previous kind's class --
+       app.js renders all nine into the one reused #panelMount, and
+       registry.js only clears the __mp* state objects. So a mount that has
+       shown an image panel keeps .mp-image-panel forever. Kind-scoped rules
+       below are therefore either descendant selectors (which cannot misfire,
+       because the stale classes all pile onto the SAME element) or explicitly
+       guarded.
+     - panels/adsb.js injects its own <style> at runtime. It is written
+       against these tokens so it re-skins for free; the handful of literals
+       it still holds are corrected in the adsb section near the bottom.
+
+   Contrast: every text colour here was measured against the surface it
+   actually sits on, and every one clears WCAG AA (4.5:1) -- the tightest are
+   --mp-text-dim on --mp-surface at 6.4:1 and the map legend at 4.6:1 over a
+   worst-case white patch of basemap. Where the reference design puts small
+   mono labels on --mp-text-faint (3.2:1) they are on --mp-text-dim here
+   instead. --mp-text-faint appears exactly twice, in both cases outside the
+   text-contrast requirement: the label of a DISABLED control (3.15:1;
+   inactive components are exempt, and dimming is the whole signal) and the
+   unlit LED dot on the squelch badge (3.10:1, non-text, over the 3:1 floor
+   for graphical objects). */
+
+/* ---------- fonts ----------
+
+   Declared here as well as in app.css because the harness loads neither
+   app.css nor anything else. Same three local latin-subset faces, served by
+   the same embedded FS (go:embed static/*); the URLs are relative to THIS
+   file, which resolves in both hosts (static/panels/ -> static/fonts/, and
+   server/static/panels/ -> server/static/fonts/). Never an external URL: the
+   portal has to work on an air-gapped machine. */
+
+@font-face {
+  font-family: "Archivo";
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url("../fonts/archivo-500.woff2") format("woff2");
 }
 
-/* ---------- shared panel chrome ---------- */
+@font-face {
+  font-family: "Archivo";
+  font-style: italic;
+  font-weight: 800;
+  font-display: swap;
+  src: url("../fonts/archivo-800-italic.woff2") format("woff2");
+}
+
+@font-face {
+  font-family: "Fragment Mono";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("../fonts/fragment-mono-400.woff2") format("woff2");
+}
+
+/* ---------- tokens ---------- */
+
+:root {
+  /* HARNESS FALLBACKS. Copied verbatim from app.css's token block, which
+     loads after this file and therefore wins every one of them in the
+     portal. They are here so the panels render correctly under
+     cmd/panels-harness. Change a value in app.css and change it here. */
+  --mp-bg: #0d0c0a;
+  --mp-bg-deep: #0b0a08;
+  --mp-bg-sunken: #100e0b;
+  --mp-bg-raised: #12100d;
+  --mp-surface: #14120e;
+  --mp-surface-hi: #191713;
+  --mp-surface-2: #242019;
+
+  --mp-line-soft: #1c1913;
+  --mp-line: #242019;
+  --mp-border: #2b2820;
+  --mp-border-hi: #3a3428;
+
+  --mp-text: #ede8db;
+  --mp-text-2: #cfc7b4;
+  --mp-text-dim: #a09681;
+  --mp-text-faint: #6a6252;
+
+  --mp-accent: #3df58c;
+  --mp-accent-2: #3ddc84;
+  --mp-accent-mid: #2fb377;
+  --mp-accent-dim: #1f8c5f;
+  --mp-accent-line: #1d3527;
+  --mp-accent-wash: rgba(61, 245, 140, 0.12);
+  --mp-accent-wash-soft: rgba(61, 245, 140, 0.05);
+  --mp-accent-edge: rgba(61, 245, 140, 0.6);
+
+  --mp-warn: #ff9438;
+  --mp-warn-dim: #b06a2a;
+  --mp-warn-line: #3a2a18;
+  --mp-warn-wash: rgba(255, 148, 56, 0.08);
+
+  --mp-danger: #ff6a55;
+  --mp-ok: #3ddc84;
+
+  --mp-sans: "Archivo", "Segoe UI", system-ui, -apple-system, Roboto,
+    Helvetica, Arial, sans-serif;
+  --mp-mono: "Fragment Mono", "Cascadia Mono", "SFMono-Regular", Consolas,
+    Menlo, monospace;
+
+  --mp-fs-2xs: 9px;
+  --mp-fs-xs: 10px;
+  --mp-fs-sm: 11px;
+  --mp-fs-md: 12px;
+  --mp-fs-base: 13px;
+  --mp-fs-lg: 15px;
+  --mp-fs-readout: 40px;
+
+  --mp-lh-tight: 1.2;
+  --mp-lh-body: 1.45;
+  --mp-lh-loose: 1.6;
+
+  --mp-ls-wide: 1px;
+  --mp-ls-wider: 1.5px;
+  --mp-ls-widest: 2px;
+
+  --mp-sp-1: 2px;
+  --mp-sp-2: 4px;
+  --mp-sp-3: 6px;
+  --mp-sp-4: 8px;
+  --mp-sp-5: 10px;
+  --mp-sp-6: 12px;
+  --mp-sp-7: 14px;
+  --mp-sp-8: 16px;
+  --mp-sp-9: 20px;
+  --mp-sp-10: 26px;
+
+  --mp-radius-sm: 5px;
+  --mp-radius: 6px;
+  --mp-radius-pill: 999px;
+
+  --mp-shadow: 0 1px 2px rgba(0, 0, 0, 0.5), 0 10px 30px -12px rgba(0, 0, 0, 0.75);
+  --mp-glow: 0 0 18px rgba(61, 245, 140, 0.35);
+  --mp-focus-ring: 0 0 0 2px rgba(61, 245, 140, 0.55);
+
+  --mp-icon-speed: 1;
+  --mp-icon-play: running;
+  --mp-t-fast: 0.12s;
+  --mp-t: 0.15s;
+
+  /* PANEL-LOCAL TOKENS. Names app.css does not define, so these are live in
+     both hosts. Kept few on purpose. */
+
+  /* One toolbar height and one control height across all nine panels: the
+     single biggest reason they used to look like nine separate products. The
+     44px bar deliberately sits below the shell's 52px --mp-panelbar-h. */
+  --mp-toolbar-h: 44px;
+  --mp-ctl-h: 28px;
+  /* The same scanline value the shell paints on <body>, so a zebra stripe
+     reads as that texture continuing rather than as a second material. */
+  --mp-zebra: rgba(255, 255, 255, 0.014);
+  /* Hovering the row that is already selected: --mp-warn-wash lifted just
+     enough to answer the pointer. */
+  --mp-row-selected-hover: rgba(255, 148, 56, 0.14);
+
+  /* COMPATIBILITY ALIASES for panels/adsb.js, which reads --mp-panel,
+     --mp-panel-2 and --mp-border-soft (with the old blue-black palette as its
+     hard-coded fallbacks). app.css renamed those to --mp-bg-sunken,
+     --mp-bg-raised and --mp-line-soft; without these three lines the ADS-B
+     panel silently falls back to #121821/#161e2a/#1a222e. Delete them when
+     adsb.js is updated to the current token names. */
+  --mp-panel: var(--mp-bg-sunken);
+  --mp-panel-2: var(--mp-bg-raised);
+  --mp-border-soft: var(--mp-line-soft);
+}
+
+/* ---------- animation library ----------
+
+   Copied verbatim from doc/design-ref/mayhem-portal-design.html. Only the two
+   keyframes this file uses are carried (app.css has the full fifteen for the
+   shell's animated icons) -- the harness loads this file alone, so a keyframe
+   used here MUST be defined here.
+
+   mpIn, the design's fade-and-rise entrance, is deliberately NOT applied to
+   .mp-panel. Measured in the harness: a host that keeps the document hidden
+   -- a background tab, or the non-compositing verification pane -- never
+   produces a frame, so document.timeline.currentTime does not advance and
+   every CSS animation sticks on its first keyframe. With mpIn on the panel
+   root that first keyframe is opacity:0, i.e. an operator returning to a tab
+   of panels they left running finds a blank card. An entrance flourish is not
+   worth a data surface that can vanish. */
+
+@keyframes mpRowIn {
+  from { background: rgba(61, 245, 140, 0.16); }
+  to { background: transparent; }
+}
+
+@keyframes mpLed {
+  0%, 100% { opacity: 0.4; box-shadow: 0 0 3px 0 currentColor; }
+  50% { opacity: 1; box-shadow: 0 0 10px 2px currentColor; }
+}
+
+/* Local extension, in the reference's idiom rather than from it: the design
+   ships one row animation (mpRowIn, for a row that just appeared) but this
+   codebase also distinguishes a row that CHANGED, and flashing both the same
+   colour would throw that distinction away. Amber is the attention hue
+   everywhere else in the design, so a changed row bumps amber. */
+@keyframes mpRowBump {
+  from { background: rgba(255, 148, 56, 0.16); }
+  to { background: transparent; }
+}
+
+/* ================= shared panel chrome ================= */
 
 .mp-panel {
   display: flex;
   flex-direction: column;
   min-height: 0;
   height: 100%;
-  background: var(--mp-panel);
-  border: 1px solid var(--mp-border);
+  background: var(--mp-bg-sunken);
+  border: 1px solid var(--mp-line);
   border-radius: var(--mp-radius);
   box-shadow: var(--mp-shadow);
   color: var(--mp-text);
   font-family: var(--mp-sans);
-  font-size: 13px;
+  font-weight: 500;
+  font-size: var(--mp-fs-base);
+  line-height: var(--mp-lh-body);
   overflow: hidden;
   box-sizing: border-box;
 }
@@ -51,97 +244,188 @@
   box-sizing: border-box;
 }
 
+.mp-panel ::selection {
+  background: rgba(61, 245, 140, 0.3);
+}
+
+.mp-panel :focus-visible {
+  outline: none;
+  box-shadow: var(--mp-focus-ring);
+}
+
+/* Generic hide hook, low specificity on purpose: the per-component rules
+   below (.mp-table-detail.mp-hidden, .mp-spectrum-overlay.mp-hidden) are what
+   actually run; this only covers anything that grows the class later. */
+.mp-panel .mp-hidden {
+  display: none;
+}
+
 .mp-toolbar {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 8px 12px;
-  background: var(--mp-panel-2);
-  border-bottom: 1px solid var(--mp-border-soft);
+  gap: var(--mp-sp-6);
+  min-height: var(--mp-toolbar-h);
+  padding: var(--mp-sp-3) var(--mp-sp-7);
+  background: var(--mp-bg-raised);
+  border-bottom: 1px solid var(--mp-line);
   flex-wrap: wrap;
   flex: none;
 }
 
 .mp-title {
-  font-size: 12px;
-  font-weight: 600;
+  font-size: var(--mp-fs-base);
+  font-weight: 700;
+  letter-spacing: var(--mp-ls-wider);
+  text-transform: uppercase;
   color: var(--mp-text);
-  margin-right: auto;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  min-width: 0;
+}
+
+/* Title and count are one left-hand cluster; whichever of them comes last
+   absorbs the free space, so whatever a panel puts after it (autoscroll,
+   Save PNG, the spectrum's scale controls) lands on the right, as in the
+   design's panel headers. Written with :has rather than a per-kind selector
+   because of the sticky-class note at the top -- and if :has is unavailable
+   the pair simply shares the slack, which is untidy, not broken. */
+.mp-toolbar > .mp-title {
+  margin-right: auto;
+}
+
+.mp-toolbar > .mp-title:has(+ .mp-count) {
+  margin-right: 0;
 }
 
 .mp-count {
   font-family: var(--mp-mono);
-  font-size: 11px;
-  color: var(--mp-text-faint);
+  font-size: var(--mp-fs-sm);
+  color: var(--mp-text-dim);
   white-space: nowrap;
+  margin-right: auto;
 }
 
 .mp-count .mp-capped {
   color: var(--mp-warn);
-  margin-left: 4px;
+  margin-left: var(--mp-sp-3);
 }
 
 .mp-field-inline {
   display: flex;
   align-items: center;
-  gap: 5px;
-  font-size: 11px;
+  gap: var(--mp-sp-3);
+  font-family: var(--mp-mono);
+  font-size: var(--mp-fs-sm);
+  letter-spacing: var(--mp-ls-wide);
+  text-transform: uppercase;
   color: var(--mp-text-dim);
   white-space: nowrap;
 }
 
 .mp-btn {
   appearance: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: var(--mp-ctl-h);
+  padding: 0 var(--mp-sp-6);
   border: 1px solid var(--mp-border);
-  background: var(--mp-panel-2);
-  color: var(--mp-text);
-  padding: 4px 10px;
-  border-radius: 6px;
-  font-size: 11px;
-  font-weight: 600;
+  background: transparent;
+  color: var(--mp-text-dim);
+  border-radius: var(--mp-radius-sm);
+  font-family: var(--mp-mono);
+  font-size: var(--mp-fs-sm);
+  letter-spacing: var(--mp-ls-wide);
+  text-transform: uppercase;
   cursor: pointer;
   white-space: nowrap;
+  transition: border-color var(--mp-t) ease, color var(--mp-t) ease,
+    background var(--mp-t) ease;
 }
 
-.mp-btn:hover {
-  border-color: var(--mp-accent-dim);
+.mp-btn:hover:not(:disabled) {
+  border-color: var(--mp-accent-edge);
+  color: var(--mp-accent);
+}
+
+/* Disabled here means "this app publishes no endpoint for that control",
+   which is information, not decoration -- so it stays readable rather than
+   fading to the usual ghost. */
+.mp-btn:disabled {
+  color: var(--mp-text-faint);
+  border-color: var(--mp-line-soft);
+  cursor: not-allowed;
 }
 
 .mp-btn.mp-btn-active {
-  background: linear-gradient(180deg, var(--mp-accent), var(--mp-accent-dim));
-  border-color: var(--mp-accent-dim);
-  color: #04140f;
+  background: var(--mp-accent-wash);
+  border-color: var(--mp-accent-edge);
+  color: var(--mp-accent);
+}
+
+/* One size and one treatment for every text/number/search field in any
+   panel. */
+.mp-panel input[type="number"],
+.mp-panel input[type="text"],
+.mp-panel input[type="search"] {
+  height: var(--mp-ctl-h);
+  background: var(--mp-surface);
+  border: 1px solid var(--mp-border);
+  border-radius: var(--mp-radius-sm);
+  color: var(--mp-text);
+  caret-color: var(--mp-accent);
+  font-family: var(--mp-mono);
+  font-size: var(--mp-fs-sm);
+  padding: 0 var(--mp-sp-3);
+}
+
+.mp-panel input[type="number"]:focus,
+.mp-panel input[type="text"]:focus,
+.mp-panel input[type="search"]:focus {
+  border-color: var(--mp-accent-edge);
+  outline: none;
+}
+
+.mp-panel input[type="checkbox"] {
+  accent-color: var(--mp-accent);
+  width: 13px;
+  height: 13px;
+  margin: 0;
 }
 
 .mp-mono {
   font-family: var(--mp-mono);
 }
 
+/* Empty / awaiting states. Deliberately sentence-case: the strings that land
+   here are real sentences from the renderers ("No entries yet.", "payload is
+   N bytes, but 320x240 rgb888 needs M ..."), and an uppercase letter-spaced
+   treatment makes those unreadable. Short machine states get that treatment
+   instead -- see .mp-spectrum-overlay. */
 .mp-empty {
-  flex: 1;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: var(--mp-text-faint);
-  font-size: 12px;
-  padding: 24px;
+  color: var(--mp-text-dim);
+  font-family: var(--mp-mono);
+  font-size: var(--mp-fs-sm);
+  line-height: var(--mp-lh-loose);
+  padding: var(--mp-sp-9) var(--mp-sp-8);
   text-align: center;
+  max-width: 52ch;
+  margin: 0 auto;
 }
 
 .mp-flash-toast {
   position: absolute;
-  right: 10px;
-  bottom: 10px;
-  background: var(--mp-panel-2);
+  right: var(--mp-sp-6);
+  bottom: var(--mp-sp-6);
+  background: var(--mp-surface);
   border: 1px solid var(--mp-border);
-  border-left: 3px solid var(--mp-accent);
+  border-left: 2px solid var(--mp-accent);
   color: var(--mp-text);
-  padding: 6px 10px;
-  border-radius: 6px;
-  font-size: 11px;
+  padding: var(--mp-sp-3) var(--mp-sp-5);
+  border-radius: var(--mp-radius-sm);
+  font-family: var(--mp-mono);
+  font-size: var(--mp-fs-sm);
   box-shadow: var(--mp-shadow);
   pointer-events: none;
   opacity: 0;
@@ -157,16 +441,21 @@
   border-left-color: var(--mp-danger);
 }
 
-/* scrollbars, scoped to panel content so a host page's own scrollbars aren't affected */
+/* Scrollbars, scoped to panel content so a host page's own scrollbars aren't
+   affected. */
 
 .mp-panel *::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
+  width: 9px;
+  height: 9px;
 }
 
 .mp-panel *::-webkit-scrollbar-thumb {
   background: var(--mp-border);
-  border-radius: 4px;
+  border-radius: var(--mp-radius-sm);
+}
+
+.mp-panel *::-webkit-scrollbar-thumb:hover {
+  background: var(--mp-border-hi);
 }
 
 .mp-panel * {
@@ -193,15 +482,18 @@ table.mp-table {
   position: sticky;
   top: 0;
   z-index: 2;
-  background: var(--mp-panel-2);
-  border-bottom: 1px solid var(--mp-border);
+  /* Opaque on purpose: geotable strips its children's background to
+     transparent, and a see-through sticky header would smear the rows. */
+  background: var(--mp-bg-raised);
+  border-bottom: 1px solid var(--mp-line);
   color: var(--mp-text-dim);
-  font-size: 10px;
-  font-weight: 700;
+  font-family: var(--mp-mono);
+  font-size: var(--mp-fs-xs);
+  font-weight: 400;
   text-transform: uppercase;
-  letter-spacing: 0.05em;
+  letter-spacing: var(--mp-ls-wide);
   text-align: left;
-  padding: 6px 8px;
+  padding: var(--mp-sp-4) var(--mp-sp-5);
   cursor: pointer;
   user-select: none;
   white-space: nowrap;
@@ -222,19 +514,28 @@ table.mp-table {
 }
 
 .mp-table thead th .mp-sort-arrow {
-  margin-left: 4px;
+  margin-left: var(--mp-sp-2);
   color: var(--mp-accent);
   display: inline-block;
   width: 8px;
 }
 
 .mp-table tbody td {
-  padding: 4px 8px;
-  border-bottom: 1px solid var(--mp-border-soft);
+  padding: var(--mp-sp-3) var(--mp-sp-5);
+  border-bottom: 1px solid var(--mp-line-soft);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  font-size: 12px;
+  font-family: var(--mp-mono);
+  font-size: var(--mp-fs-md);
+  font-variant-numeric: tabular-nums;
+  color: var(--mp-text-2);
+}
+
+/* The mono flag marks a column the backend considers an identifier (ICAO,
+   MMSI, address); give those the full-strength colour so the eye lands on
+   identity first, as the design's tables do. */
+.mp-table tbody td.mp-mono {
   color: var(--mp-text);
 }
 
@@ -246,15 +547,9 @@ table.mp-table {
   text-align: center;
 }
 
-.mp-table tbody td.mp-mono {
-  font-family: var(--mp-mono);
-  font-size: 11.5px;
-}
-
 .mp-table tbody td.mp-age {
-  color: var(--mp-text-faint);
-  font-family: var(--mp-mono);
-  font-size: 11px;
+  color: var(--mp-text-dim);
+  font-size: var(--mp-fs-sm);
   text-align: right;
 }
 
@@ -262,51 +557,74 @@ table.mp-table {
   cursor: pointer;
 }
 
+/* Order matters below: zebra, then hover, then selection. Hover is phosphor
+   and selection is amber, so the two never read as the same state -- which
+   matters most when the pointer is resting on one row while another is the
+   selected one. */
+.mp-table tbody tr:nth-child(even) td {
+  background: var(--mp-zebra);
+}
+
 .mp-table tbody tr:hover td {
-  background: rgba(91, 157, 255, 0.06);
+  background: var(--mp-accent-wash-soft);
 }
 
 .mp-table tbody tr.mp-row-selected td {
-  background: rgba(52, 216, 195, 0.12);
+  background: var(--mp-warn-wash);
 }
 
+.mp-table tbody tr.mp-row-selected:hover td {
+  background: var(--mp-row-selected-hover);
+}
+
+/* A colour-independent marker for the selected row, so selection survives a
+   colour-vision difference and the reduced-motion mode alike. */
+.mp-table tbody tr.mp-row-selected td:first-child {
+  box-shadow: inset 2px 0 0 var(--mp-warn);
+}
+
+/* table.js renders "No entries yet." as a colspan cell inside tbody, so the
+   plain .mp-empty rule loses to `.mp-table tbody td` on specificity and the
+   row picks up the zebra, hover and pointer meant for real data. Restated
+   here (after the row states, which it has to outrank) so an empty table
+   reads like every other panel's empty state and does not invite a click. */
+.mp-table tbody tr td.mp-empty {
+  color: var(--mp-text-dim);
+  font-size: var(--mp-fs-sm);
+  padding: var(--mp-sp-9) var(--mp-sp-8);
+  white-space: normal;
+  background: transparent;
+  cursor: default;
+}
+
+.mp-table tbody tr:hover td.mp-empty {
+  background: transparent;
+}
+
+/* table.js removes these classes on animationend, so the animation must
+   always RUN and always FINISH: never animation:none here, and never
+   animation-play-state from --mp-icon-play, or a flashed row stays flashed
+   for good. The reduced-motion block at the bottom swaps the timing function
+   rather than the animation, for the same reason. */
 .mp-table tbody tr.mp-row-new td {
-  animation: mp-row-flash-new 2.4s ease-out;
+  animation: mpRowIn calc(1.4s * var(--mp-icon-speed, 1)) ease both;
 }
 
 .mp-table tbody tr.mp-row-updated td {
-  animation: mp-row-flash-updated 1.4s ease-out;
-}
-
-@keyframes mp-row-flash-new {
-  0% {
-    background: rgba(61, 220, 132, 0.35);
-  }
-  100% {
-    background: transparent;
-  }
-}
-
-@keyframes mp-row-flash-updated {
-  0% {
-    background: rgba(91, 157, 255, 0.28);
-  }
-  100% {
-    background: transparent;
-  }
+  animation: mpRowBump calc(1s * var(--mp-icon-speed, 1)) ease both;
 }
 
 .mp-table-detail {
   flex: none;
   max-height: 40%;
   overflow: auto;
-  border-top: 1px solid var(--mp-border);
-  background: var(--mp-panel-2);
-  padding: 10px 12px;
+  border-top: 1px solid var(--mp-line);
+  background: var(--mp-bg-raised);
+  padding: var(--mp-sp-6) var(--mp-sp-7);
   display: grid;
   grid-template-columns: max-content 1fr;
-  gap: 4px 14px;
-  font-size: 12px;
+  gap: var(--mp-sp-3) var(--mp-sp-8);
+  font-size: var(--mp-fs-md);
 }
 
 .mp-table-detail.mp-hidden {
@@ -314,15 +632,17 @@ table.mp-table {
 }
 
 .mp-table-detail .mp-detail-key {
-  color: var(--mp-text-faint);
+  color: var(--mp-text-dim);
+  font-family: var(--mp-mono);
+  font-size: var(--mp-fs-xs);
   text-transform: uppercase;
-  font-size: 10px;
-  letter-spacing: 0.04em;
+  letter-spacing: var(--mp-ls-wide);
   align-self: center;
 }
 
 .mp-table-detail .mp-detail-val {
   font-family: var(--mp-mono);
+  font-size: var(--mp-fs-md);
   color: var(--mp-text);
   word-break: break-word;
 }
@@ -335,7 +655,7 @@ table.mp-table {
   min-height: 0;
   display: flex;
   flex-direction: column;
-  background: #05070b;
+  background: var(--mp-bg-deep);
 }
 
 .mp-spectrum-canvases canvas {
@@ -351,13 +671,14 @@ table.mp-table {
 .mp-spectrum-waterfall {
   flex: 1;
   min-height: 90px;
+  border-top: 1px solid var(--mp-line);
 }
 
 .mp-spectrum-axis {
   flex: none;
-  height: 18px;
-  background: #05070b;
-  border-top: 1px solid var(--mp-border-soft);
+  height: var(--mp-sp-9);
+  background: var(--mp-bg-deep);
+  border-top: 1px solid var(--mp-line-soft);
 }
 
 .mp-spectrum-overlay {
@@ -367,18 +688,23 @@ table.mp-table {
   align-items: center;
   justify-content: center;
   pointer-events: none;
-  color: var(--mp-text-faint);
-  font-family: var(--mp-mono);
-  font-size: 12px;
-  text-align: center;
-  background: rgba(5, 7, 11, 0.4);
+  /* --mp-bg-deep at 55%; there is no alpha variant of it in the token set. */
+  background: rgba(11, 10, 8, 0.55);
 }
 
+/* A short machine state ("RX not streaming.") -- the one place the design's
+   uppercase letter-spaced treatment reads well. */
 .mp-spectrum-overlay span {
-  background: rgba(10, 14, 20, 0.75);
+  background: rgba(11, 10, 8, 0.9);
   border: 1px solid var(--mp-border);
-  padding: 7px 12px;
-  border-radius: 6px;
+  color: var(--mp-text-dim);
+  font-family: var(--mp-mono);
+  font-size: var(--mp-fs-sm);
+  letter-spacing: var(--mp-ls-widest);
+  text-transform: uppercase;
+  padding: var(--mp-sp-4) var(--mp-sp-8);
+  border-radius: var(--mp-radius-sm);
+  text-align: center;
 }
 
 .mp-spectrum-overlay.mp-hidden {
@@ -390,168 +716,223 @@ table.mp-table {
 .mp-receiver-body {
   flex: 1;
   overflow: auto;
-  padding: 14px;
+  padding: var(--mp-sp-8);
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: var(--mp-sp-6);
+  width: 100%;
+  max-width: 860px;
+  margin: 0 auto;
+}
+
+/* The instrument cards -- frequency, meter, each control, AGC -- share one
+   border, one radius and one padding. */
+.mp-freq-block,
+.mp-meter-row,
+.mp-control-field,
+.mp-agc-row {
+  border: 1px solid var(--mp-line);
+  background: var(--mp-surface);
+  border-radius: var(--mp-radius);
 }
 
 .mp-freq-block {
   text-align: center;
+  padding: var(--mp-sp-10) var(--mp-sp-8) var(--mp-sp-8);
+  background: var(--mp-bg-raised);
 }
 
 .mp-freq-mode {
-  font-size: 11px;
-  color: var(--mp-accent);
+  font-family: var(--mp-mono);
+  font-size: var(--mp-fs-xs);
+  color: var(--mp-text-dim);
   text-transform: uppercase;
-  letter-spacing: 0.08em;
-  margin-bottom: 4px;
+  letter-spacing: var(--mp-ls-widest);
+  margin-bottom: var(--mp-sp-5);
+  min-height: 1em;
 }
 
 .mp-freq-readout {
   font-family: var(--mp-mono);
-  font-size: 34px;
-  font-weight: 600;
-  color: var(--mp-text);
-  letter-spacing: 0.01em;
+  font-size: var(--mp-fs-readout);
+  font-weight: 400;
+  color: var(--mp-accent);
+  text-shadow: var(--mp-glow);
   cursor: text;
   display: inline-flex;
   align-items: baseline;
-  gap: 6px;
+  gap: var(--mp-sp-4);
 }
 
 .mp-freq-readout .mp-freq-unit {
-  font-size: 14px;
-  color: var(--mp-text-faint);
-  font-weight: 400;
+  font-size: var(--mp-fs-lg);
+  color: var(--mp-text-dim);
+  text-shadow: none;
 }
 
-.mp-freq-readout input {
+/* Specificity has to beat the shared .mp-panel input[type="text"] rule above,
+   which would otherwise force the edit field back to a 28px control. */
+.mp-panel .mp-freq-readout input[type="text"] {
   font-family: var(--mp-mono);
-  font-size: 34px;
-  font-weight: 600;
-  background: var(--mp-panel-2);
-  border: 1px solid var(--mp-accent-dim);
-  border-radius: 6px;
-  color: var(--mp-text);
+  font-size: var(--mp-fs-readout);
+  height: auto;
+  background: var(--mp-surface-hi);
+  border: 1px solid var(--mp-accent-edge);
+  border-radius: var(--mp-radius-sm);
+  color: var(--mp-accent);
   width: 9ch;
   text-align: right;
-  padding: 0 4px;
+  padding: 0 var(--mp-sp-3);
 }
 
 .mp-freq-steps {
   display: flex;
   justify-content: center;
-  gap: 6px;
-  margin-top: 8px;
+  gap: var(--mp-sp-4);
+  margin-top: var(--mp-sp-7);
 }
 
 .mp-meter-row {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: var(--mp-sp-6);
+  padding: var(--mp-sp-8);
 }
 
 .mp-meter-track {
   flex: 1;
-  height: 10px;
-  border-radius: 5px;
-  background: var(--mp-panel-2);
-  border: 1px solid var(--mp-border);
+  height: var(--mp-sp-5);
+  border-radius: var(--mp-radius-pill);
+  background: var(--mp-surface-hi);
+  border: 1px solid var(--mp-line-soft);
   overflow: hidden;
   position: relative;
 }
 
 .mp-meter-fill {
   height: 100%;
-  border-radius: 5px 0 0 5px;
-  background: linear-gradient(90deg, var(--mp-ok), var(--mp-warn) 75%, var(--mp-danger));
-  transition: width 0.12s linear;
+  border-radius: var(--mp-radius-pill);
+  background: linear-gradient(90deg, var(--mp-accent-dim), var(--mp-accent) 70%, var(--mp-warn));
+  transition: width var(--mp-t-fast) linear;
 }
 
 .mp-meter-label {
   font-family: var(--mp-mono);
-  font-size: 11px;
-  color: var(--mp-text-dim);
-  width: 6ch;
+  font-size: var(--mp-fs-md);
+  color: var(--mp-text-2);
+  font-variant-numeric: tabular-nums;
+  width: 7ch;
   text-align: right;
 }
 
 .mp-sql-badge {
   flex: none;
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 0.05em;
-  padding: 3px 8px;
-  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--mp-sp-3);
+  font-family: var(--mp-mono);
+  font-size: var(--mp-fs-xs);
+  letter-spacing: var(--mp-ls-wide);
+  padding: var(--mp-sp-2) var(--mp-sp-5);
+  border-radius: var(--mp-radius-pill);
   border: 1px solid var(--mp-border);
+  color: var(--mp-text-dim);
+  white-space: nowrap;
+}
+
+/* The LED is a pseudo-element rather than the badge itself: mpLed swings
+   opacity to 0.4, which on the label text would take it under the contrast
+   floor twice a second. The dot carries the pulse, the text stays legible.
+   --mp-icon-play is the shell's motion switch (paused under
+   :root[data-motion="off"]); safe on an infinite decorative loop, unlike the
+   row flashes above, which JS waits on. */
+.mp-sql-badge::before {
+  content: "";
+  width: var(--mp-sp-3);
+  height: var(--mp-sp-3);
+  border-radius: 50%;
+  background: currentColor;
   color: var(--mp-text-faint);
+  flex: none;
 }
 
 .mp-sql-badge.mp-open {
-  color: #04140f;
-  background: var(--mp-ok);
-  border-color: var(--mp-ok);
+  color: var(--mp-accent);
+  border-color: var(--mp-accent-edge);
+  background: var(--mp-accent-wash);
+}
+
+.mp-sql-badge.mp-open::before {
+  color: var(--mp-accent);
+  animation: mpLed calc(1.6s * var(--mp-icon-speed, 1)) ease-in-out infinite;
+  animation-play-state: var(--mp-icon-play, running);
 }
 
 .mp-control-field {
   display: flex;
   flex-direction: column;
-  gap: 5px;
+  gap: var(--mp-sp-5);
+  padding: var(--mp-sp-7) var(--mp-sp-8);
 }
 
 .mp-control-row {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: var(--mp-sp-5);
   justify-content: space-between;
 }
 
 .mp-control-label {
-  font-size: 11px;
+  font-family: var(--mp-mono);
+  font-size: var(--mp-fs-xs);
   color: var(--mp-text-dim);
   text-transform: uppercase;
-  letter-spacing: 0.05em;
+  letter-spacing: var(--mp-ls-widest);
 }
 
 .mp-control-value {
   font-family: var(--mp-mono);
-  font-size: 11px;
+  font-size: var(--mp-fs-md);
   color: var(--mp-accent);
+  font-variant-numeric: tabular-nums;
 }
 
 .mp-control-row input[type="range"] {
   flex: 1;
   accent-color: var(--mp-accent);
   height: 4px;
+  min-width: 0;
 }
 
 .mp-control-row input[type="number"] {
-  width: 76px;
-  background: var(--mp-panel-2);
-  border: 1px solid var(--mp-border);
-  color: var(--mp-text);
-  border-radius: 5px;
-  padding: 3px 6px;
-  font-family: var(--mp-mono);
-  font-size: 11px;
+  width: 84px;
+  flex: none;
 }
 
-.mp-control-row input:disabled {
-  opacity: 0.4;
+/* An unavailable control means the app published no endpoint for it. Keep it
+   readable -- it still shows the current value -- but unmistakably inert. */
+.mp-control-row input:disabled,
+.mp-switch input:disabled + .mp-switch-track {
+  opacity: 0.55;
   cursor: not-allowed;
+}
+
+.mp-control-row input[type="number"]:disabled {
+  color: var(--mp-text-dim);
+  border-color: var(--mp-line-soft);
 }
 
 .mp-agc-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  padding: var(--mp-sp-7) var(--mp-sp-8);
 }
 
 .mp-switch {
   position: relative;
   display: inline-block;
-  width: 34px;
+  width: 36px;
   height: 18px;
   flex: none;
 }
@@ -565,34 +946,32 @@ table.mp-table {
 .mp-switch-track {
   position: absolute;
   inset: 0;
-  background: var(--mp-border);
-  border-radius: 999px;
-  transition: background 0.15s ease;
+  background: var(--mp-surface-hi);
+  border: 1px solid var(--mp-border);
+  border-radius: var(--mp-radius-pill);
+  transition: background var(--mp-t) ease, border-color var(--mp-t) ease;
 }
 
 .mp-switch-track::before {
   content: "";
   position: absolute;
-  height: 14px;
-  width: 14px;
+  height: 12px;
+  width: 12px;
   left: 2px;
   top: 2px;
   background: var(--mp-text-dim);
   border-radius: 50%;
-  transition: transform 0.15s ease, background 0.15s ease;
+  transition: transform var(--mp-t) ease, background var(--mp-t) ease;
 }
 
 .mp-switch input:checked + .mp-switch-track {
-  background: var(--mp-accent-dim);
+  background: var(--mp-accent-wash);
+  border-color: var(--mp-accent-edge);
 }
 
 .mp-switch input:checked + .mp-switch-track::before {
-  transform: translateX(16px);
+  transform: translateX(18px);
   background: var(--mp-accent);
-}
-
-.mp-switch input:disabled + .mp-switch-track {
-  opacity: 0.4;
 }
 
 /* ================= console ================= */
@@ -601,37 +980,49 @@ table.mp-table {
   flex: 1;
   overflow: auto;
   min-height: 0;
-  padding: 8px 10px;
+  padding: var(--mp-sp-3) 0;
   font-family: var(--mp-mono);
-  font-size: 12px;
-  line-height: 1.55;
-  background: #05070b;
+  font-size: var(--mp-fs-md);
+  line-height: 1.5;
+  background: var(--mp-bg-deep);
+  color: var(--mp-text-2);
   position: relative;
 }
 
+/* No entrance animation on a log line, deliberately: nothing in the emitted
+   DOM distinguishes a line that just arrived from the 200 already on screen,
+   so animating .mp-console-line would flash the entire backlog on every
+   mount. The log's own scroll is the motion. */
 .mp-console-line {
   white-space: pre-wrap;
   word-break: break-word;
+  padding: var(--mp-sp-3) var(--mp-sp-8);
+  border-bottom: 1px solid var(--mp-line-soft);
 }
 
+/* A line's own colour runs (the STR_COLOR_* escapes) are set inline by
+   console.js and win over the container colour, which is right: a coloured
+   line is the decoder telling you something. */
 .mp-console-ts {
-  color: var(--mp-text-faint);
-  margin-right: 8px;
+  color: var(--mp-text-dim);
+  margin-right: var(--mp-sp-5);
   user-select: none;
 }
 
 .mp-jump-pill {
   position: absolute;
-  bottom: 10px;
-  right: 14px;
-  background: var(--mp-accent-dim);
-  color: #04140f;
-  font-size: 11px;
-  font-weight: 700;
-  padding: 5px 12px;
-  border-radius: 999px;
+  bottom: var(--mp-sp-6);
+  right: var(--mp-sp-8);
+  background: var(--mp-accent);
+  color: var(--mp-bg-deep);
+  font-family: var(--mp-mono);
+  font-size: var(--mp-fs-xs);
+  letter-spacing: var(--mp-ls-wide);
+  text-transform: uppercase;
+  padding: var(--mp-sp-3) var(--mp-sp-7);
+  border-radius: var(--mp-radius-pill);
   cursor: pointer;
-  box-shadow: var(--mp-shadow);
+  box-shadow: var(--mp-glow), var(--mp-shadow);
   display: none;
 }
 
@@ -645,7 +1036,7 @@ table.mp-table {
   position: relative;
   flex: 1;
   min-height: 0;
-  background: #05070b;
+  background: var(--mp-bg-deep);
   overflow: hidden;
 }
 
@@ -662,92 +1053,304 @@ table.mp-table {
 
 .mp-map-controls {
   position: absolute;
-  top: 10px;
-  right: 10px;
+  top: var(--mp-sp-5);
+  right: var(--mp-sp-5);
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: var(--mp-sp-2);
+}
+
+/* Square-ish zoom keys, backed enough to stay readable over whatever the
+   canvas draws underneath them (--mp-bg-deep at 82%). */
+.mp-map-controls .mp-btn {
+  min-width: var(--mp-ctl-h);
+  padding: 0 var(--mp-sp-4);
+  background: rgba(11, 10, 8, 0.82);
+  color: var(--mp-text-2);
 }
 
 .mp-map-legend {
   position: absolute;
-  left: 10px;
-  bottom: 10px;
+  left: var(--mp-sp-5);
+  bottom: var(--mp-sp-5);
   display: flex;
-  gap: 10px;
-  font-size: 10px;
+  gap: var(--mp-sp-6);
+  font-family: var(--mp-mono);
+  font-size: var(--mp-fs-xs);
+  letter-spacing: var(--mp-ls-wide);
+  text-transform: uppercase;
   color: var(--mp-text-dim);
-  background: rgba(10, 14, 20, 0.75);
+  background: rgba(11, 10, 8, 0.85);
   border: 1px solid var(--mp-border);
-  border-radius: 6px;
-  padding: 4px 8px;
+  border-radius: var(--mp-radius-sm);
+  padding: var(--mp-sp-2) var(--mp-sp-4);
+}
+
+/* map.js empties the legend when no marker declares a kind; an empty bordered
+   box in the corner would read as a broken widget. */
+.mp-map-legend:empty {
+  display: none;
 }
 
 .mp-map-legend .mp-legend-item {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: var(--mp-sp-3);
 }
 
 .mp-map-legend .mp-legend-dot {
-  width: 8px;
-  height: 8px;
+  width: var(--mp-sp-4);
+  height: var(--mp-sp-4);
   border-radius: 50%;
   display: inline-block;
+  flex: none;
 }
 
 .mp-map-tooltip {
   position: absolute;
   pointer-events: none;
-  background: rgba(10, 14, 20, 0.92);
+  background: rgba(11, 10, 8, 0.95);
   border: 1px solid var(--mp-border);
-  border-radius: 6px;
-  padding: 6px 9px;
-  font-size: 11px;
+  border-left: 2px solid var(--mp-accent);
+  border-radius: var(--mp-radius-sm);
+  padding: var(--mp-sp-3) var(--mp-sp-5);
+  font-family: var(--mp-mono);
+  font-size: var(--mp-fs-sm);
   color: var(--mp-text);
-  max-width: 220px;
+  max-width: 240px;
   box-shadow: var(--mp-shadow);
   transform: translate(-50%, -120%);
   white-space: nowrap;
+  z-index: 3;
+}
+
+/* ================= adsb =================
+
+   The ninth panel styles itself: panels/adsb.js injects its own <style> at
+   first render. That sheet is written against these tokens, so its surfaces
+   and type re-skin from the palette for free -- but a handful of its
+   declarations are literal values from the old blue-black palette
+   (rgba(10,14,20,...) overlay boxes, a blue row hover, a teal selection) and
+   two more put 10px text on --mp-text-faint, which measures 3.2:1 and misses
+   AA. Those are corrected here.
+
+   These win by specificity, not order: the injected sheet lands in <head>
+   after this file, so every selector below carries the panel root's
+   .mp-panel to outrank its equivalent. The real fix is in adsb.js -- this is
+   the CSS-only half, and it is why the values are restated rather than
+   edited in place. Deliberately NOT overridden: the map's own control-key
+   sizing (.mp-adsb-ctl .mp-adsb-btn), which should keep winning. */
+
+.mp-panel .mp-adsb-bar input[type="search"],
+.mp-panel .mp-adsb-bar input[type="number"],
+.mp-panel .mp-adsb-bar select {
+  height: var(--mp-ctl-h);
+  background: var(--mp-surface);
+  border: 1px solid var(--mp-border);
+  border-radius: var(--mp-radius-sm);
+  color: var(--mp-text);
+  caret-color: var(--mp-accent);
+  font: var(--mp-fs-sm) var(--mp-mono);
+}
+
+.mp-panel .mp-adsb-bar label {
+  font: var(--mp-fs-sm) var(--mp-mono);
+  letter-spacing: var(--mp-ls-wide);
+  text-transform: uppercase;
+  color: var(--mp-text-dim);
+}
+
+.mp-panel .mp-adsb-btn {
+  height: var(--mp-ctl-h);
+  background: transparent;
+  border-color: var(--mp-border);
+  border-radius: var(--mp-radius-sm);
+  color: var(--mp-text-dim);
+  font: var(--mp-fs-sm) var(--mp-mono);
+  letter-spacing: var(--mp-ls-wide);
+  text-transform: uppercase;
+}
+
+.mp-panel .mp-adsb-btn:hover {
+  border-color: var(--mp-accent-edge);
+  color: var(--mp-accent);
+}
+
+.mp-panel .mp-adsb-btn[aria-pressed="true"] {
+  background: var(--mp-accent-wash);
+  border-color: var(--mp-accent-edge);
+  color: var(--mp-accent);
+}
+
+/* Map overlays: the design's near-opaque warm black, and dim rather than
+   faint text (6.6:1 instead of 3.2:1 over the box). */
+.mp-panel .mp-adsb-scale,
+.mp-panel .mp-adsb-legend {
+  background: rgba(11, 10, 8, 0.85);
+  border: 1px solid var(--mp-border);
+  border-radius: var(--mp-radius-sm);
+  color: var(--mp-text-dim);
+}
+
+.mp-panel .mp-adsb-offline {
+  background: rgba(11, 10, 8, 0.85);
+  color: var(--mp-text-dim);
+}
+
+/* The attribution keeps its full-strength colour and its place above every
+   other overlay -- the OSM usage policy; see the comment in adsb.js. */
+.mp-panel .mp-adsb-attrib {
+  background: rgba(11, 10, 8, 0.85);
+}
+
+.mp-panel .mp-adsb-tip {
+  background: rgba(11, 10, 8, 0.95);
+  border: 1px solid var(--mp-border);
+  border-left: 2px solid var(--mp-accent);
+  border-radius: var(--mp-radius-sm);
+}
+
+/* The same row grammar as the shared table: phosphor hover, amber selection,
+   mpRowIn for a contact heard for the first time. */
+.mp-panel table.mp-adsb-table tbody tr:hover {
+  background: var(--mp-accent-wash-soft);
+}
+
+.mp-panel table.mp-adsb-table tbody tr.mp-adsb-sel {
+  background: var(--mp-warn-wash);
+}
+
+.mp-panel table.mp-adsb-table tbody tr.mp-adsb-new td {
+  animation: mpRowIn calc(1.4s * var(--mp-icon-speed, 1)) ease both;
+}
+
+.mp-panel table.mp-adsb-table tr.mp-adsb-stale td {
+  color: var(--mp-text-dim);
+}
+
+.mp-panel .mp-adsb-empty {
+  color: var(--mp-text-dim);
+  font: var(--mp-fs-sm) var(--mp-mono);
+}
+
+/* ================= geotable (map over table) ================= */
+
+/* The map half is a full map panel, so it arrives with its own toolbar --
+   which would stack three headers on one card. Its title and marker count are
+   both already in this panel's toolbar ("N of M located" is a superset of
+   "N markers"), so the nested one is dropped and the table's is kept as the
+   section header for the list below, exactly as the design's AIS screen is
+   laid out. */
+.mp-geotable-panel .mp-map-panel > .mp-toolbar {
+  display: none;
+}
+
+.mp-geotable-panel .mp-table-panel > .mp-toolbar {
+  min-height: 34px;
+  background: transparent;
+  border-bottom: 1px solid var(--mp-line);
+}
+
+.mp-geotable-panel .mp-table-panel > .mp-toolbar .mp-title {
+  font-size: var(--mp-fs-sm);
+  color: var(--mp-text-2);
+}
+
+/* ================= image ================= */
+
+/* The stage element is styled inline by image.js (flex/padding/background);
+   only the canvas frame and the note are CSS's to own. The :not() guards are
+   the sticky-class defence: without them this frames the spectrum's trace and
+   waterfall, and the map, in any mount that has previously shown an image. */
+.mp-image-panel > div:not(.mp-spectrum-canvases):not(.mp-map-canvas-wrap) > canvas {
+  border: 1px solid var(--mp-line);
+  border-radius: var(--mp-radius-sm);
+  background: var(--mp-bg-deep);
 }
 
 /* ================= screen (fallback) ================= */
 
+/* margin:auto (not justify-content on the panel, which would linger on the
+   next kind rendered into this mount -- see the sticky-class note) centres
+   the card in both axes. */
 .mp-screen-card {
-  flex: 1;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 10px;
-  padding: 28px;
+  gap: var(--mp-sp-6);
+  padding: var(--mp-sp-10);
+  margin: auto;
+  max-width: 460px;
   text-align: center;
+  border: 1px solid var(--mp-line);
+  background: var(--mp-surface);
+  border-radius: var(--mp-radius);
 }
 
 .mp-screen-icon {
-  color: var(--mp-text-faint);
-  opacity: 0.7;
+  color: var(--mp-text-2);
 }
 
 .mp-screen-name {
-  font-size: 16px;
-  font-weight: 600;
+  font-size: var(--mp-fs-lg);
+  font-weight: 700;
+  letter-spacing: var(--mp-ls-wide);
+  text-transform: uppercase;
   color: var(--mp-text);
 }
 
+/* Amber, as the design marks a category tag. */
 .mp-screen-category {
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 0.06em;
+  font-family: var(--mp-mono);
+  font-size: var(--mp-fs-xs);
+  letter-spacing: var(--mp-ls-wide);
   text-transform: uppercase;
-  color: var(--mp-text-faint);
-  border: 1px solid var(--mp-border);
-  border-radius: 999px;
-  padding: 2px 9px;
+  color: var(--mp-warn);
+  border: 1px solid var(--mp-warn-line);
+  background: var(--mp-warn-wash);
+  border-radius: var(--mp-radius-pill);
+  padding: var(--mp-sp-1) var(--mp-sp-5);
 }
 
 .mp-screen-reason {
-  font-size: 12px;
+  font-size: var(--mp-fs-md);
+  line-height: var(--mp-lh-loose);
   color: var(--mp-text-dim);
-  max-width: 32em;
+  max-width: 34em;
+}
+
+/* ================= reduced motion =================
+
+   The animation library is decorative; state is not. Motion stops, every
+   state stays legible:
+
+     - The LED pulse is dropped outright and its dot left lit, so "squelch
+       open" still reads at a glance.
+     - The row flashes are NOT dropped, and this is the one place in this file
+       that needs !important. app.css's reduced-motion block sets
+       `animation: none !important` on every element, which would strand
+       .mp-row-new / .mp-row-updated / .mp-adsb-new on their rows forever --
+       table.js removes those classes on animationend, an event that never
+       fires if the animation never runs -- and would leave a newly heard
+       contact with no indication at all. Instead they run with step-end: the
+       tint appears, holds, and disappears in one discrete step. No
+       interpolated motion, no stranded state, and the event still fires. The
+       higher specificity is what wins against app.css's `*` rule; if that
+       blanket rule is ever scoped, drop the !important here with it. */
+
+@media (prefers-reduced-motion: reduce) {
+  .mp-sql-badge.mp-open::before {
+    animation: none;
+    opacity: 1;
+  }
+
+  .mp-table tbody tr.mp-row-new td,
+  .mp-panel table.mp-adsb-table tbody tr.mp-adsb-new td {
+    animation: mpRowIn 1.4s step-end both !important;
+  }
+
+  .mp-table tbody tr.mp-row-updated td {
+    animation: mpRowBump 1s step-end both !important;
+  }
 }

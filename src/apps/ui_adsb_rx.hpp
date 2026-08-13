@@ -27,12 +27,15 @@
  *     on_frame_sync() with samples pulled off the receiver instead of from a
  *     buffer_c8_t handed over by an interrupt.
  *
- *  2. Sample tap. ReceiverModel only exposes take_spectrum_samples(), which
+ *  2. Sample tap. This app subscribes to ReceiverModel's gapless raw tap
+ *     (radio::RawSampleTap), so every sample the radio delivers reaches the
+ *     demodulator in order. It used to poll take_spectrum_samples(), which
  *     hands out the most recent 4096 raw samples (~2 ms at 2 Msps) and is
- *     re-armed once per DSP block. Polled at the 60 Hz UI rate that recovers
- *     roughly 12% of the air time, so frames are decoded correctly but many are
- *     missed. The tap this app actually wants is a gapless raw-IQ subscription
- *     at the tuned rate — see the note on AdsbRxView::pump().
+ *     re-armed once per DSP block: at the 60 Hz UI rate that recovered roughly
+ *     12% of the air time, and *less* as the sample rate rose, because a fixed
+ *     sample count is a shorter time at a faster rate. Frames it saw were
+ *     decoded correctly; the rest were never presented. See
+ *     AdsbRxView::pump().
  *
  *  3. `byte` in upstream's execute() is a *local* that resets on every baseband
  *     buffer, so a frame straddling a buffer boundary decodes with corrupted
@@ -77,6 +80,7 @@
 #define __MB200_UI_ADSB_RX_H__
 
 #include "../dsp/protocol.hpp"
+#include "../radio/rate_policy.hpp"
 #include "../radio/receiver_model.hpp"
 #include "ui.hpp"
 #include "ui_geomap.hpp"
@@ -287,7 +291,14 @@ constexpr size_t kPreambleLength = 16; /* 8 us at 2 samples/us */
  * device cannot deliver exactly 2 Msps, but it is not free: an output sample
  * whose two neighbours straddle a half-bit edge lands between the two levels,
  * which costs contrast on the bit decision. Split out from the demodulator so
- * the rate arithmetic can be checked on its own. */
+ * the rate arithmetic can be checked on its own.
+ *
+ * At an exact integer ratio this SUBSAMPLES — 4 Msps in, every other sample
+ * out, no averaging (adsb_resampler_halves_an_integer_rate pins that). It is
+ * deliberately left that way, because reducing noise bandwidth is only
+ * possible before the square law and this class runs after it. Integer ratios
+ * are handled ahead of the magnitude step instead; see AdsbDemod's
+ * input_decimation(). */
 class MagnitudeResampler {
    public:
     /* input_hz == output_hz (within a hertz) selects bypass, and samples are
@@ -352,10 +363,12 @@ class AdsbDemod {
 
     AdsbDemod() { reset(); }
 
-    /* Clears the decode state. Deliberately does NOT clear the noise-floor
-     * estimate: the app resets the demodulator once per sample block (the
-     * blocks are not adjacent in time), and a per-block reset would leave the
-     * scale permanently unmeasured. */
+    /* Clears the decode state, the preamble history and the decimator's
+     * partial accumulator. Deliberately does NOT clear the noise-floor
+     * estimate: the app calls this whenever the tap reports a gap, and dropping
+     * the measured scale with it would leave the amplitude unreadable for as
+     * long as the machine kept struggling. (It used to be called once per
+     * block, when every block was a snapshot not adjacent in time to the last.) */
     void reset();
 
     /* Input amplitude that maps to int8 full scale. Zero — the default —
@@ -371,13 +384,39 @@ class AdsbDemod {
     /* Int8 counts per unit of input amplitude currently in force. */
     float input_scale() const;
 
-    /* Rate of the samples handed to process(). Anything other than 2 Msps is
-     * linearly resampled to 2 Msps on the magnitude stream, which is legitimate
-     * for an envelope-detected on/off keyed signal but costs sensitivity; the
-     * app asks the radio for 2 Msps and only relies on this when the device
-     * cannot deliver it. */
+    /* Rate of the samples handed to process(), brought down to 2 Msps in two
+     * stages: an integer complex decimation (input_decimation() below), then
+     * linear interpolation of the magnitude stream for whatever fraction is
+     * left. 2.4 Msps decimates by 1 and interpolates; 8 Msps decimates by 4
+     * and the interpolator bypasses. Interpolating an envelope is legitimate
+     * for on/off keying but costs contrast, so it is used only for the
+     * fractional remainder. */
     void set_input_rate(double hz);
     double input_rate() const { return input_rate_; }
+
+    /* --- Why a faster radio needs a filter, not just a resampler ------------
+     *
+     * ReceiverModel opens the analog front end to 0.8 * the sample rate, so
+     * asking a B200 for 8 Msps instead of 2 admits four times the noise POWER
+     * while the 1 MBit/s signal stays exactly as strong. Reducing the stream
+     * back to 2 Msps by subsampling — which is what MagnitudeResampler does at
+     * an integer ratio — keeps every bit of that extra noise and discards three
+     * quarters of the samples that could have averaged it away. That is why
+     * raising an app's sample rate on its own makes it decode WORSE, and it is
+     * measured rather than assumed: see adsb_decimation_beats_subsampling_in_noise
+     * in tests/test_adsb_tap.cpp.
+     *
+     * So an integer multiple of the native rate is reduced by averaging the
+     * COMPLEX samples over each output period, before the square law — the only
+     * place noise bandwidth can still be taken back. A 0.5 us boxcar is the
+     * matched filter for a Mode S pulse and is coherent over that span (a 2 kHz
+     * frequency error turns the phase by 0.4 degrees), so it passes the pulse at
+     * full amplitude while the noise averages down. The wider front end then
+     * costs nothing and the finer sampling grid is a real gain: pulse edges land
+     * on a 1/8 us grid instead of a 1/2 us one.
+     *
+     * Samples per output period; 1 at or below 2 Msps. */
+    size_t input_decimation() const { return decim_; }
 
     /* Complex baseband. Magnitudes are converted to the units the firmware
      * works in — see the amplitude-scale note above — so that the `amp`
@@ -400,6 +439,15 @@ class AdsbDemod {
     void update_noise_floor(const float* mags, size_t count);
 
     double input_rate_{kNativeSampleRate};
+
+    /* Complex boxcar ahead of the square law — see input_decimation(). The
+     * accumulator carries across process() calls, so a block boundary is not a
+     * seam; reset() clears it, because the samples after a real gap must not be
+     * averaged with the ones before it. */
+    size_t decim_{1};
+    dsp::cfloat decim_acc_{0.0f, 0.0f};
+    size_t decim_n_{0};
+
     MagnitudeResampler resampler_{};
     std::vector<float> mag_raw_{};
     std::vector<float> mag_scratch_{};
@@ -669,19 +717,17 @@ class AdsbRxView : public ui::View {
     void on_show() override;
     void on_frame_sync() override;
 
-    /* Pulls whatever samples the receiver has, runs them through the
-     * demodulator and folds the resulting frames into the tracker. Public
-     * because the views pushed on top of this one have to call it — nothing
-     * below the top of the navigation stack is ticked, so without this the
-     * decoder would stop the moment the operator opened the detail page.
+    /* Drains everything the radio has delivered since the last call, runs it
+     * through the demodulator and folds the resulting frames into the tracker.
+     * Public because the views pushed on top of this one have to call it —
+     * nothing below the top of the navigation stack is ticked, so without this
+     * the decoder would stop the moment the operator opened the detail page.
      *
-     * IDEAL TAP: a gapless subscription to the raw RX stream, e.g.
-     * ReceiverModel::add_raw_sink(std::function<void(const cfloat*, size_t)>)
-     * called from the DSP thread, or a second consumer cursor on
-     * UsrpRadio::rx_ring(). take_spectrum_samples() is a 4096-sample snapshot
-     * that the DSP thread overwrites continuously, so at 2 Msps and a 60 Hz
-     * poll this sees about 12% of the air time. Every frame it does see is
-     * decoded correctly; the rest are simply never presented. */
+     * The samples come off radio::RawSampleTap, which delivers them all, in
+     * order, and reports any hole it had to leave rather than papering over it.
+     * The demodulator therefore keeps its state across calls — a frame
+     * straddling two pumps decodes normally — and is reset only when the tap
+     * says the stream actually broke. */
     void pump();
 
     /* Advances ages and prunes; called once a second by whichever view is on
@@ -694,11 +740,47 @@ class AdsbRxView : public ui::View {
     uint32_t frames_seen() const { return tracker_.frames_seen(); }
     uint32_t frames_accepted() const { return tracker_.frames_accepted(); }
 
+    /* --- Tap health ---
+     * What the operator (and the portal, one line each, without this app
+     * needing to know the portal exists) needs in order to tell "there is
+     * nothing on the air" from "this machine cannot keep up".
+     *
+     * samples_lost() is the number of samples the tap had to discard because
+     * this view did not drain it in time, and gaps() how many separate holes
+     * they fell into. Both are lifetime totals for as long as the app has been
+     * open. Nothing here is an estimate: a lost sample is one the tap counted
+     * and told us about. */
+    uint64_t samples_decoded() const { return samples_decoded_; }
+    uint64_t samples_lost() const { return samples_lost_; }
+    uint32_t gaps() const { return gaps_; }
+    bool gapless() const { return receiver_ != nullptr && receiver_->raw_tap_enabled(); }
+    double sample_rate_hz() const { return receiver_ ? receiver_->sampling_rate() : 0.0; }
+
+    /* Fraction of the air that reached the demodulator, 0..1 — the figure the
+     * old snapshot tap could not exceed ~0.12 on. Returns 1.0 before any
+     * samples have arrived, which is what "nothing has been lost" means.
+     *
+     * Only meaningful while gapless(). The snapshot fallback keeps no count of
+     * what it overwrote between polls, so there is nothing to divide by and
+     * this reads 1.0 there; the status line shows the arithmetic duty cycle
+     * instead, labelled as the estimate it is. */
+    double air_fraction() const {
+        const uint64_t total = samples_decoded_ + samples_lost_;
+        return (total == 0) ? 1.0 : static_cast<double>(samples_decoded_) /
+                                        static_cast<double>(total);
+    }
+
     /* ADS-B is a fixed-frequency service. */
     static constexpr uint64_t kFrequency = 1'090'000'000;
 
+    /* What this app needs from the sample rate, as radio::choose_rx_rate()
+     * takes it. Exposed so the choice can be tested against device profiles
+     * without a radio; see tests/test_adsb_tap.cpp. */
+    static radio::RatePreference rate_preference();
+
    private:
     void refresh_status();
+    void refresh_tap_status();
     void set_logging(bool enabled);
     void write_log(const AdsbLogEntry& entry);
 
@@ -709,6 +791,10 @@ class AdsbRxView : public ui::View {
     std::vector<dsp::cfloat> samples_{};
     uint32_t frame_counter_{0};
     uint32_t seconds_{0};
+
+    uint64_t samples_decoded_{0};
+    uint64_t samples_lost_{0};
+    uint32_t gaps_{0};
 
     bool logging_{false};
     std::unique_ptr<std::ofstream> log_file_{};
@@ -740,10 +826,13 @@ class AdsbRxView : public ui::View {
     AircraftRecentEntries& recent_;
     ui::RecentEntriesView<AircraftRecentEntries> recent_view_;
 
-    ui::Labels tap_note_{
-        {{0, 272}, "Wideband tap only: ~12% of", ui::Color::grey()},
-        {{0, 288}, "air time is seen. No radio.", ui::Color::grey()},
-    };
+    /* Two live lines rather than the fixed note that used to sit here saying
+     * "~12% of air time is seen": with the rate chosen from the radio's caps
+     * and the tap dropping under load rather than blocking the DSP thread,
+     * both of those numbers now move, and a stale printed constant would be
+     * the one thing on screen that could lie. */
+    ui::Text text_tap_{{0, 272, 240, 16}, ""};
+    ui::Text text_air_{{0, 288, 240, 16}, ""};
 };
 
 }  // namespace app

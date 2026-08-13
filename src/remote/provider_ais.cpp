@@ -22,6 +22,16 @@
  * a second data source. The screen's own list is what the columns follow, and
  * that is what is here.
  *
+ * THE PANEL IS A GEOTABLE, NOT A PLAIN TABLE. The table half is byte-for-byte
+ * what this file published before — same columns, same cells, same order — and
+ * the markers are a strict addition beside it. A ship earns a marker ONLY when
+ * its stored position passes the app's own validity gate
+ * (Latitude/Longitude::is_valid(), which is what ais::format::latlon() branches
+ * on before it will print coordinates). A vessel heard only through a message
+ * that carries no position, or one broadcasting the 91/181-degree
+ * "not available" sentinel, appears in the table and NOT on the map. It is not
+ * at 0N 0E.
+ *
  * THREADING: a provider is only ever called from AppBridge::refresh(), i.e.
  * on the UI thread, so walking the view tree and reading the entries list here
  * races nothing — see app_bridge.hpp's file header.
@@ -109,6 +119,51 @@ TableData ais_table_data(const app::AISRecentEntries& entries) {
     return table_data_from_entries(ais_columns(), entries, ais_row);
 }
 
+/* The map half. Exposed for the same reason as ais_table_data(): the rule about
+ * which ships do and do not get a marker is the part worth asserting, and it is
+ * only worth asserting against entries a real AISRecentEntry::update() built.
+ *
+ * Nothing here decodes or re-derives a position. The degrees conversion is the
+ * app's own ais::format::latlon_float(), which is what AISRecentEntryDetailView
+ * feeds its ui::GeoMarker (ais_app.cpp) — re-deriving "1/10000 minute to
+ * degrees" here would be a second implementation to keep in step. */
+std::vector<GeoTableMarker> ais_geo_markers(const app::AISRecentEntries& entries,
+                                            size_t max_markers) {
+    std::vector<GeoTableMarker> markers;
+    size_t n = 0;
+    for (const auto& e : entries) {
+        if (n >= max_markers) break;
+        n++;
+
+        const auto& pos = e.last_position;
+        /* The app's own gate, not a re-invented one. */
+        if (!pos.latitude.is_valid() || !pos.longitude.is_valid()) continue;
+
+        GeoTableMarker mk;
+        mk.lat = static_cast<double>(ais::format::latlon_float(pos.latitude.normalized()));
+        mk.lon = static_cast<double>(ais::format::latlon_float(pos.longitude.normalized()));
+
+        /* The marker has to be identifiable against its own table row, so the
+         * label is that row's Name/Call cell — already '@'-padding-stripped by
+         * ais::format::text() — falling back to the MMSI, which is the entry's
+         * key and can never be absent. (AISRecentEntryDetailView's own GeoMarker
+         * tag uses the RAW call sign, which for a transponder padding the field
+         * with '@' would put "@@@@@@@" on the map.) */
+        const auto row = ais_row(e);
+        mk.label = row[1].empty() ? row[0] : row[1];
+
+        /* 511 is ITU-R M.1371's "not available" for true heading, and it is the
+         * default AISPosition is constructed with; anything at or above it means
+         * the ship has not reported one. Absent, not zero: a marker drawn on a
+         * heading of 000 is a claim the vessel is pointing due north. */
+        if (pos.true_heading < 511) mk.heading_deg = static_cast<double>(pos.true_heading);
+
+        mk.kind = "vessel";
+        markers.push_back(std::move(mk));
+    }
+    return markers;
+}
+
 namespace {
 
 PanelData ais_panel(ui::View& view) {
@@ -121,8 +176,11 @@ PanelData ais_panel(ui::View& view) {
         return panel;
     }
 
-    panel.kind = PanelKind::Table;
-    panel.table = ais_table_data(app_view->entries());
+    panel.kind = PanelKind::GeoTable;
+    panel.geotable.table = ais_table_data(app_view->entries());
+    /* The same 200-row ceiling table_data_from_entries() applies, so a marker
+     * can never refer to a row the table does not carry. */
+    panel.geotable.markers = ais_geo_markers(app_view->entries(), 200);
     return panel;
 }
 

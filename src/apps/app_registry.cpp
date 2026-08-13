@@ -7,7 +7,13 @@
 
 #include "app_registry.hpp"
 
+/* ui::View is only forward-declared in the header; the factory wrapper in
+ * add() owns a std::unique_ptr<ui::View> for the length of one statement, and
+ * destroying one needs the complete type. */
+#include "ui_widget.hpp"
+
 #include <algorithm>
+#include <utility>
 
 namespace app {
 
@@ -38,6 +44,23 @@ void AppRegistry::add(AppEntry entry) {
     for (const auto& e : entries_) {
         if (e.id == entry.id) return;
     }
+
+    /* Wrap the factory once, here, so that every push site stamps the app id
+     * onto the view it pushes without knowing it has to. Three unrelated
+     * places build app views — the home/category menus (main_menu.cpp), the
+     * scanner, and the web portal's launch queue — and the factory is the
+     * only thing all three go through, as well as the only thing that knows
+     * which app a `ui::View` is. The web portal reads the stamp back off the
+     * navigation stack (see ui::View::app_id). Nothing about what gets pushed
+     * changes; an entry with no factory is left exactly as it was. */
+    if (entry.factory) {
+        entry.factory = [id = entry.id, inner = std::move(entry.factory)]() {
+            auto view = inner();
+            if (view) view->set_app_id(id);
+            return view;
+        };
+    }
+
     entries_.push_back(std::move(entry));
 }
 

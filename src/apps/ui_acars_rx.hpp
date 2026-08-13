@@ -562,6 +562,12 @@ class AcarsRxView : public ui::View {
     void on_hide() override;
     void on_frame_sync() override;
 
+    /* Read-only, for src/remote/provider_acars.cpp — the same idiom as
+     * AprsTableView::entries() (ui_aprs_rx.hpp). The decoded blocks exist only
+     * in this console, and a panel provider handed a ui::View& cannot reach a
+     * private member. */
+    const ui::Console& console() const { return console_; }
+
    private:
     void rebuild_chain();
     void pump_samples();

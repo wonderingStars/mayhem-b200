@@ -4,11 +4,19 @@
 //
 // Command mayhem-portal serves the browser app portal: a grid of all of
 // mayhem-b200's ~103 apps, grouped and searchable, that launches any of
-// them and renders their live structured data. It is a JSON proxy in front
-// of mayhem-b200's own app-portal HTTP API (default
-// http://127.0.0.1:8090 — see doc/REMOTE-UI.md's neighbouring, separate
-// framebuffer-mirror protocol for context) plus the embedded UI in
-// internal/portal/server/static.
+// them, renders their live structured data, and mirrors the device's
+// 240x320 screen with the browser's keys, wheel and pointer routed back to
+// it. It is a proxy in front of mayhem-b200's own HTTP API (default
+// http://127.0.0.1:8090; the protocol on both hops is doc/REMOTE-UI.md)
+// plus the embedded UI in internal/portal/server/static.
+//
+// SECURITY: this relays INPUT. A browser attached to /api/screen/ws drives
+// the radio exactly as the operator standing in front of it does, transmit
+// apps included, and nothing here authenticates anyone — there is no login,
+// and wsUpgrade does not check Origin. -http defaults to a port on all
+// interfaces, so anyone who can reach it can press the buttons. Bind it to
+// localhost, or put it behind something that does authenticate, on any
+// network that is not trusted.
 //
 // This is a separate binary from mayhem-webgui (the existing sdrlink radio
 // GUI) because it drives a completely different backend: mayhem-webgui
@@ -72,6 +80,13 @@ func main() {
 		}
 	}()
 	logger.Printf("app portal on http://%s/ (backend: %s)", displayAddr(*httpAddr), *backendAddr)
+	// Said out loud at startup, not just in a doc comment: the live screen
+	// makes this a control surface, and it has no authentication.
+	// ASCII only: this lands on a Windows console that is cp1252 by default,
+	// where an em dash arrives as mojibake.
+	logger.Printf("app portal: unauthenticated - anyone who can reach this "+
+		"address can drive the radio (screen input, transmit included) on %s",
+		*backendAddr)
 
 	// Surface a bind failure (e.g. port already in use) promptly rather
 	// than only discovering it when a browser fails to connect.

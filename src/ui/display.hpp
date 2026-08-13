@@ -27,6 +27,7 @@
 #include "ui_text.hpp"
 
 #include <array>
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <mutex>
@@ -127,14 +128,46 @@ class Display {
      * width()*height() entries, applying the active scroll mapping. */
     void composite_bgra(uint32_t* out) const;
 
+    /* Same visual result as composite_bgra(), into a width()*height() buffer of
+     * the framebuffer's own RGB565 words. The web portal streams these verbatim
+     * (see the /api/screen frame layout in remote/remote_server.hpp), and going
+     * through composite_bgra() would cost an RGB565 -> RGB888 -> RGB565 round
+     * trip per frame. read_pixels() cannot stand in for this: it reads raw rows
+     * without the scroll mapping, so the waterfall region of every spectrum-style
+     * app would tear. */
+    void composite_rgb565(uint16_t* out) const;
+
     /* True if anything has been drawn since the last composite. Lets the window
      * layer skip redundant blits. */
     bool take_damage();
-    void mark_damaged() { damaged_ = true; }
+
+    /* Monotonic count of damage events. take_damage() is destructive and
+     * therefore single-consumer — the window layer owns it, and a second reader
+     * would silently stop the window repainting. This is the non-destructive
+     * form: a second consumer (the portal's frame capture) remembers the last
+     * value it saw and compares, consuming nothing. Wraps at 2^32 like any
+     * counter; the comparison callers do is equality, which wrapping does not
+     * break. */
+    uint32_t damage_generation() const { return damage_generation_.load(std::memory_order_relaxed); }
+
+    void mark_damaged() {
+        damaged_ = true;
+        damage_generation_.fetch_add(1, std::memory_order_relaxed);
+    }
 
     std::mutex& lock() { return mutex_; }
 
    private:
+    /* Raises both damage signals at once. Every drawing primitive calls this
+     * instead of assigning damaged_ directly, so a new consumer can never be
+     * added by touching only one of the two. Callers already hold mutex_;
+     * damage_generation_ is atomic anyway because mark_damaged() is the one
+     * entry point that does not. */
+    void mark_damaged_locked() {
+        damaged_ = true;
+        damage_generation_.fetch_add(1, std::memory_order_relaxed);
+    }
+
     /* Row of the framebuffer, no scroll translation. Bounds-checked by callers. */
     uint16_t* row(int y) { return &fb_[static_cast<size_t>(y) * ui::screen_width]; }
     const uint16_t* row(int y) const { return &fb_[static_cast<size_t>(y) * ui::screen_width]; }
@@ -153,6 +186,9 @@ class Display {
     scroll_t scroll_state;
     bool scroll_enabled_{false};
     bool damaged_{true};
+    /* Starts at 1, not 0, so it agrees with damaged_{true}: a consumer whose
+     * "last seen" starts at 0 correctly reads the initial state as damaged. */
+    std::atomic<uint32_t> damage_generation_{1};
     mutable std::mutex mutex_;
 };
 

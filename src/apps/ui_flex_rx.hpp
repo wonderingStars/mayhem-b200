@@ -1689,6 +1689,12 @@ class FlexRxView : public ui::View {
     /* Exposed so the display path can be tested without a radio. */
     void handle_packet(const flex::FlexPacket& packet);
 
+    /* Read-only, for src/remote/provider_flex.cpp — the same idiom as
+     * AprsTableView::entries() (ui_aprs_rx.hpp). The decoded pages exist only
+     * in this console, and a panel provider handed a ui::View& cannot reach a
+     * private member. */
+    const ui::Console& console() const { return console_; }
+
    private:
     void reconfigure_dsp();
 

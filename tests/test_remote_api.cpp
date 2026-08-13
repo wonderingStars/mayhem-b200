@@ -180,7 +180,8 @@ TEST(panel_payload_covers_every_kind) {
     const PanelKind kinds[] = {
         PanelKind::Table, PanelKind::Spectrum, PanelKind::Receiver,
         PanelKind::Console, PanelKind::Map, PanelKind::Adsb,
-        PanelKind::Form, PanelKind::Screen,
+        PanelKind::Form, PanelKind::Screen, PanelKind::Image,
+        PanelKind::GeoTable,
     };
     for (const auto k : kinds) {
         remote::PanelData p;
@@ -717,7 +718,10 @@ TEST(aprs_panel_provider_publishes_a_table_when_the_app_is_open) {
     const std::string panel = remote::AppBridge::instance().panel_json();
 
     CHECK(json_contains(panel, "\"app_id\":\"aprsrx\""));
-    CHECK(json_contains(panel, "\"panel_kind\":\"table\""));
+    /* Upgraded from "table" to "geotable" (provider_aprs.cpp): the table half is
+     * unchanged and the station markers are a strict addition beside it, so the
+     * columns and rows assertions below still hold verbatim. */
+    CHECK(json_contains(panel, "\"panel_kind\":\"geotable\""));
     CHECK(json_contains(panel, "\"columns\":[\"Source\",\"Loc\",\"Hits\",\"Time\"]"));
     /* No device, so no stations: an empty rows array, not a fabricated row. */
     CHECK(json_contains(panel, "\"rows\":[]"));
@@ -739,8 +743,9 @@ TEST(aprs_panel_provider_survives_the_operator_drilling_into_a_sub_view) {
 
     /* Still the stations table. Without NavigationView::at_depth() this would
      * be a PanelKind::Screen and the browser would go blank for as long as the
-     * operator left the map open. */
-    CHECK(json_contains(panel, "\"panel_kind\":\"table\""));
+     * operator left the map open. (Kind upgraded from "table" to "geotable";
+     * the columns are unchanged.) */
+    CHECK(json_contains(panel, "\"panel_kind\":\"geotable\""));
     CHECK(json_contains(panel, "\"columns\":[\"Source\",\"Loc\",\"Hits\",\"Time\"]"));
 }
 
@@ -748,10 +753,15 @@ TEST(aprs_panel_provider_says_so_honestly_when_the_app_is_not_on_the_stack) {
     AprsPanelHarness h;
     h.launch_aprs();
 
-    /* Popped on the device rather than through request_home(), so the bridge
-     * still believes aprsrx is current while AprsRxView has gone. The provider
-     * has to report that rather than serve a stale or empty table that reads
-     * as "APRS RX is running and hearing nothing". */
+    /* Popped on the device rather than through request_home() -- the path a
+     * remote key press takes, which never goes near the launch queue.
+     * AppBridge::refresh() derives the current app from the navigation stack,
+     * so with the view gone the truthful answer is Home: not this app's data,
+     * and not this app's name over an empty version of it. Before that
+     * derivation the bridge went on believing the app was current and the
+     * provider's own "... is not the open app." guard is what answered here.
+     * That guard is still in the provider; the bridge simply no longer asks a
+     * provider about an app that is not on the stack. */
     h.nav.pop_to_root();
     h.nav.service();
     CHECK_EQ(h.nav.depth(), size_t{1});
@@ -760,7 +770,9 @@ TEST(aprs_panel_provider_says_so_honestly_when_the_app_is_not_on_the_stack) {
     const std::string panel = remote::AppBridge::instance().panel_json();
 
     CHECK(json_contains(panel, "\"panel_kind\":\"screen\""));
-    CHECK(json_contains(panel, "APRS RX is not the open app."));
+    CHECK(json_contains(panel, "Home -- no app is open."));
+    /* The stale id is what this change fixed; pin it, not just the text. */
+    CHECK(json_contains(panel, "\"app_id\":\"\""));
     /* Emphatically not an empty table, which would be indistinguishable from
      * a running receiver that has heard nothing. */
     CHECK(!json_contains(panel, "\"columns\""));

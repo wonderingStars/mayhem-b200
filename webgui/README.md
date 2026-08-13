@@ -70,8 +70,8 @@ mayhem-b200's ~103 apps (grouped by category, searchable, with a clear
 badge on hardware-limited ones), that launches any of them and renders
 whatever structured data they publish. It is a JSON proxy in front of
 mayhem-b200's own **app-portal HTTP API** (default
-`http://127.0.0.1:8090`; see `../doc/REMOTE-UI.md` for the separate,
-lower-level framebuffer-mirror protocol this complements) — not the
+`http://127.0.0.1:8090`; `../doc/REMOTE-UI.md` documents that API and the
+screen-mirror WebSocket this serves on top of it) — not the
 sdrlink protocol `mayhem-webgui` speaks. That's why it's a separate
 process rather than a mode of `mayhem-webgui`: the two have no backend in
 common, and nothing is gained by merging them. Run both, on different

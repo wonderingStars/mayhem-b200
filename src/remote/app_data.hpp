@@ -15,7 +15,9 @@
 #ifndef __MB200_REMOTE_APP_DATA_H__
 #define __MB200_REMOTE_APP_DATA_H__
 
+#include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -94,7 +96,10 @@ struct AppSummary {
 };
 JsonValue to_json(const AppSummary& a);
 
-/* What kind of panel a currently-open app's data can be rendered as. */
+/* What kind of panel a currently-open app's data can be rendered as.
+ *
+ * The enumerator's numeric value is never on the wire — panel_kind_name() is —
+ * so new kinds are appended here rather than slotted in alphabetically. */
 enum class PanelKind : uint8_t {
     Table,
     Spectrum,
@@ -104,6 +109,8 @@ enum class PanelKind : uint8_t {
     Adsb,
     Form,
     Screen,
+    Image,
+    GeoTable,
 };
 const char* panel_kind_name(PanelKind k);
 
@@ -151,7 +158,14 @@ struct MapMarker {
     double lat{0.0};
     double lon{0.0};
     std::string label;
-    double heading_deg{0.0};
+    /* Optional rather than a plain double defaulting to 0.0: most marker
+     * sources carry no heading at all — WardriveMap builds its own GeoMarkers
+     * with ui::invalid_angle (ui_wardrivemap.cpp's load_markers) — and a 0.0
+     * on the wire would draw every one of them pointing due north. An optional
+     * cannot be set and then silently dropped, which a parallel has_heading
+     * flag could be; existing brace initializers that pass a double still
+     * compile and still serialize the heading. */
+    std::optional<double> heading_deg{};
 };
 struct MapData {
     std::vector<MapMarker> markers;
@@ -215,6 +229,65 @@ struct FormData {
 };
 JsonValue to_json(const FormData& f);
 
+/* ---------------------------------------------------------------------------
+ * Image panel
+ *
+ * A decoded picture an app is already holding in memory, published so the
+ * browser can show it at its own scale instead of squinting at the 240x320
+ * screen. The payload is deliberately dumb: width, height, rgb888 bytes.
+ *
+ * `rev` is what keeps a ~200 kB base64 blob off the wire on every 700 ms poll.
+ * It increments ONLY when the pixels actually changed (see ImageRevCounter),
+ * and the client tells the server which rev it already has; data_b64 is then
+ * omitted rather than re-sent. rev 0 means nothing has been decoded yet — in
+ * that state `rgb` is empty and `note` says so. A black frame is never
+ * synthesized to fill the gap: "no picture yet" and "a picture that happens to
+ * be black" are different answers, and only the first one is true here.
+ * ------------------------------------------------------------------------- */
+struct ImageData {
+    std::string app_name; /* empty = omitted */
+    uint32_t width{0};
+    uint32_t height{0};
+    uint32_t rev{0};
+    /* width*height*3 bytes, R,G,B per pixel, first row first. Empty when
+     * nothing has been decoded. */
+    std::vector<uint8_t> rgb;
+    std::string note; /* empty = omitted */
+};
+
+/* `have_rev` is the rev the client says it already holds (0 = "nothing"):
+ * data_b64 is omitted when it matches, which is the whole point of rev. */
+JsonValue to_json(const ImageData& i, uint32_t have_rev = 0);
+
+/* ---------------------------------------------------------------------------
+ * Geo-table panel
+ *
+ * A table and a map of the same entries, for apps whose rows carry a position:
+ * the table is exactly the flat TableData shape the app already published, so
+ * upgrading an app from `table` to `geotable` cannot change a single cell, and
+ * the markers are a strict addition alongside it.
+ *
+ * The load-bearing rule is that an entry WITHOUT a position fix appears in the
+ * table and NOT on the map. Absent stays absent; a station heard only through
+ * a status packet is not at 0N 0E.
+ * ------------------------------------------------------------------------- */
+struct GeoTableMarker {
+    double lat{0.0};
+    double lon{0.0};
+    std::string label;
+    /* Absent unless the entry really carried one — see MapMarker. */
+    std::optional<double> heading_deg{};
+    /* A rendering hint for the browser's icon choice ("vessel", "station",
+     * ...), not decoded data. Empty = omitted. */
+    std::string kind;
+};
+struct GeoTableData {
+    std::string app_name; /* empty = omitted */
+    TableData table;
+    std::vector<GeoTableMarker> markers;
+};
+JsonValue to_json(const GeoTableData& g);
+
 /* The fallback: no structured provider exists (yet) for the open app, or no
  * app is open. `message` is shown to the operator instead of an empty panel. */
 struct ScreenData {
@@ -236,6 +309,8 @@ struct PanelData {
     AdsbData adsb{};
     FormData form{};
     ScreenData screen{};
+    ImageData image{};
+    GeoTableData geotable{};
 };
 JsonValue to_json(const PanelData& p);
 
@@ -244,8 +319,67 @@ JsonValue to_json(const PanelData& p);
  * {app_id, panel_kind, title, data}, where `data` is the payload alone
  * (a `map` panel's renderer is handed {markers: [...]}, not
  * {kind: "map", map: {markers: [...]}}). to_json(PanelData) builds its
- * self-describing form on top of this. */
-JsonValue panel_payload(const PanelData& p);
+ * self-describing form on top of this.
+ *
+ * `have_image_rev` is only consulted for PanelKind::Image and is threaded in
+ * from the request (GET /api/panel?have_image_rev=N); it defaults to 0, which
+ * means "the client has nothing", because a rev of 0 never carries pixels
+ * anyway. Every other kind ignores it. */
+JsonValue panel_payload(const PanelData& p, uint32_t have_image_rev = 0);
+
+/* ---------------------------------------------------------------------------
+ * Pixel and payload helpers
+ *
+ * Shared by the image providers (provider_apt/wefax/sstv), which all read the
+ * same thing: a framebuffer of ui::Color, i.e. native-endian RGB565 laid out
+ * rrrrrggggggbbbbb. They are declared on uint16_t rather than ui::Color so
+ * this header keeps its independence from src/ui, and exposed rather than left
+ * file-local in one provider so the other two do not each grow a copy.
+ * ------------------------------------------------------------------------- */
+
+/* Standard base64 (RFC 4648 section 4), '=' padded. */
+std::string base64_encode(const uint8_t* data, size_t count);
+
+/* True when every pixel is black — the state a freshly constructed or cleared
+ * scan canvas is in, and the one case where there is genuinely no image to
+ * publish. An empty buffer is blank too. */
+bool rgb565_is_blank(const uint16_t* pixels, size_t count);
+
+/* FNV-1a over the raw pixels. Used only to answer "did anything change since
+ * the last frame", never as an identity the client sees. */
+uint64_t rgb565_content_hash(const uint16_t* pixels, size_t count);
+
+/* Expands to RGB888 with the low bits replicated, so a full-scale channel
+ * reaches 0xFF rather than 0xF8. Exactly Display::composite_bgra()'s
+ * expansion (src/ui/display.cpp) — the browser must not show a picture that
+ * differs from the device's own screen by a systematic 3% darkening. */
+void rgb565_to_rgb888(const uint16_t* pixels, size_t count, std::vector<uint8_t>& out);
+
+/* Turns "the pixels changed" into Contract 4's monotonic `rev`.
+ *
+ * A raw content hash cannot be the rev: the contract says rev increments, and
+ * a client comparing an unordered 64-bit value could not tell a new picture
+ * from an old one it had already discarded. So the hash is kept privately and
+ * a counter is bumped when it moves. The counter never bumps for an unchanged
+ * frame, which is the whole reason it exists — every bump costs the browser a
+ * fresh ~200 kB fetch.
+ *
+ * UI thread only: providers run solely from AppBridge::refresh(), so each one
+ * holds a function-local static of this with no locking (app_bridge.hpp's file
+ * header is the contract). */
+class ImageRevCounter {
+   public:
+    /* Returns the rev for this frame. The first ever call yields 1, so 0 stays
+     * reserved for "nothing decoded yet". */
+    uint32_t observe(uint64_t content_hash);
+
+    uint32_t rev() const { return rev_; }
+
+   private:
+    uint64_t last_hash_{0};
+    uint32_t rev_{0};
+    bool seeded_{false};
+};
 
 }  // namespace remote
 

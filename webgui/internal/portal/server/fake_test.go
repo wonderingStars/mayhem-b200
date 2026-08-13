@@ -6,7 +6,9 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"sync"
 
 	"mayhemb200/webgui/internal/portal/client"
 )
@@ -29,6 +31,19 @@ type fakeBackend struct {
 	panelErr   error
 	status     client.Status
 	statusErr  error
+
+	// Screen/input state for the live-screen bridge (screen.go). Guarded by
+	// a mutex because, unlike every other field here, these are touched from
+	// the hub's own goroutines while the test's goroutine reads them.
+	mu sync.Mutex
+	// lastPanelRev records the have_image_rev the server forwarded.
+	lastPanelRev string
+	// screenFn, when set, answers each Screen call; nil means "no frame
+	// yet" (204), which is what a backend with nothing drawn returns.
+	screenFn func(ctx context.Context, after uint32, waitMS int) (client.ScreenFrame, bool, error)
+	// inputBatches records every batch that reached the backend.
+	inputBatches [][]json.RawMessage
+	inputErr     error
 }
 
 func (f *fakeBackend) Apps(ctx context.Context) ([]client.App, error) {
@@ -48,11 +63,55 @@ func (f *fakeBackend) Home(ctx context.Context) (client.CurrentApp, error) {
 	f.homeCalled = true
 	return client.CurrentApp{Title: "Home"}, f.homeErr
 }
-func (f *fakeBackend) Panel(ctx context.Context) (client.Panel, error) {
+func (f *fakeBackend) Panel(ctx context.Context, haveImageRev string) (client.Panel, error) {
+	f.mu.Lock()
+	f.lastPanelRev = haveImageRev
+	f.mu.Unlock()
 	return f.panel, f.panelErr
 }
 func (f *fakeBackend) Status(ctx context.Context) (client.Status, error) {
 	return f.status, f.statusErr
+}
+
+func (f *fakeBackend) Screen(ctx context.Context, after uint32, waitMS int) (client.ScreenFrame, bool, error) {
+	f.mu.Lock()
+	fn := f.screenFn
+	f.mu.Unlock()
+	if fn == nil {
+		return client.ScreenFrame{}, false, nil
+	}
+	return fn(ctx, after, waitMS)
+}
+
+func (f *fakeBackend) Input(ctx context.Context, events []json.RawMessage) (client.InputResult, error) {
+	f.mu.Lock()
+	f.inputBatches = append(f.inputBatches, events)
+	err := f.inputErr
+	f.mu.Unlock()
+	if err != nil {
+		return client.InputResult{}, err
+	}
+	return client.InputResult{Queued: len(events)}, nil
+}
+
+// panelRev returns the have_image_rev last forwarded to Panel.
+func (f *fakeBackend) panelRev() string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.lastPanelRev
+}
+
+// inputEvents returns every event that reached the backend, flattened.
+func (f *fakeBackend) inputEvents() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var out []string
+	for _, batch := range f.inputBatches {
+		for _, e := range batch {
+			out = append(out, string(e))
+		}
+	}
+	return out
 }
 
 var _ Backend = (*fakeBackend)(nil)

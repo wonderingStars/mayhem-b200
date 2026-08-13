@@ -34,7 +34,7 @@ void Display::init() {
     std::fill(fb_.begin(), fb_.end(), 0);
     scroll_enabled_ = false;
     scroll_state = {0, 0, static_cast<ui::Dim>(ui::screen_height), 0};
-    damaged_ = true;
+    mark_damaged_locked();
 }
 
 void Display::shutdown() {}
@@ -54,7 +54,7 @@ void Display::fill_rectangle(ui::Rect r, const ui::Color c) {
         uint16_t* dst = row(y) + cr.left();
         std::fill(dst, dst + cr.width(), c.v);
     }
-    damaged_ = true;
+    mark_damaged_locked();
 }
 
 void Display::draw_pixel(const ui::Point p, const ui::Color color) {
@@ -62,7 +62,7 @@ void Display::draw_pixel(const ui::Point p, const ui::Color color) {
 
     std::lock_guard<std::mutex> g{mutex_};
     row(p.y())[p.x()] = color.v;
-    damaged_ = true;
+    mark_damaged_locked();
 }
 
 void Display::draw_line(const ui::Point start, const ui::Point end, const ui::Color color) {
@@ -135,7 +135,7 @@ void Display::draw_bitmap(const ui::Point p,
                     dst[px] = background.v;
             }
         }
-        damaged_ = true;
+        mark_damaged_locked();
         return;
     }
 
@@ -171,7 +171,7 @@ void Display::draw_pixels(const ui::Rect r, const ui::Color* const colors, const
             row(y)[x] = colors[i].v;
         }
     }
-    damaged_ = true;
+    mark_damaged_locked();
 }
 
 void Display::read_pixels(const ui::Rect r, ui::ColorRGB888* const colors, const size_t count) {
@@ -202,7 +202,7 @@ void Display::render_line(const ui::Point p, const uint16_t count, const ui::Col
         if (x < 0 || x >= width()) continue;
         dst[x] = line_buffer[i].v;
     }
-    damaged_ = true;
+    mark_damaged_locked();
 }
 
 void Display::render_box(const ui::Point p, const ui::Size s, const ui::Color* line_buffer) {
@@ -222,14 +222,14 @@ void Display::scroll_set_area(const ui::Coord top_y, const ui::Coord bottom_y) {
     if (scroll_state.height <= 0) scroll_state.height = 1;
     scroll_state.current_position = 0;
     scroll_enabled_ = true;
-    damaged_ = true;
+    mark_damaged_locked();
 }
 
 ui::Coord Display::scroll_set_position(const ui::Coord position) {
     std::lock_guard<std::mutex> g{mutex_};
     if (scroll_state.height <= 0) return 0;
     scroll_state.current_position = static_cast<ui::Coord>(position % scroll_state.height);
-    damaged_ = true;
+    mark_damaged_locked();
     return static_cast<ui::Coord>(scroll_state.top_area + scroll_state.current_position);
 }
 
@@ -254,7 +254,7 @@ void Display::scroll_disable() {
     std::lock_guard<std::mutex> g{mutex_};
     scroll_enabled_ = false;
     scroll_state = {0, 0, static_cast<ui::Dim>(height()), 0};
-    damaged_ = true;
+    mark_damaged_locked();
 }
 
 /* --- Compositing ----------------------------------------------------------- */
@@ -292,6 +292,32 @@ void Display::composite_bgra(uint32_t* out) const {
             const uint32_t b = (b5 << 3) | (b5 >> 2);
             dst[x] = (r << 16) | (g << 8) | b;
         }
+    }
+}
+
+/* Deliberately a near-copy of composite_bgra()'s row loop rather than a shared
+ * template: the scroll mapping is the part that must not drift between the two,
+ * and it is four lines. The inner loop differs completely — this one copies the
+ * stored word, which is the whole point. */
+void Display::composite_rgb565(uint16_t* out) const {
+    std::lock_guard<std::mutex> guard{mutex_};
+
+    const int w = width();
+    const int h = height();
+
+    for (int vy = 0; vy < h; vy++) {
+        int fy = vy;
+        if (scroll_enabled_ && scroll_state.height > 0) {
+            const int top = scroll_state.top_area;
+            const int sh = scroll_state.height;
+            if (vy >= top && vy < top + sh) {
+                const int k = vy - top;
+                fy = top + ((scroll_state.current_position + k) % sh);
+            }
+        }
+
+        const uint16_t* src = row(fy);
+        std::copy(src, src + w, out + static_cast<size_t>(vy) * w);
     }
 }
 

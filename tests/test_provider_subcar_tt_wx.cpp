@@ -595,14 +595,23 @@ TEST(subcar_panel_provider_says_so_honestly_when_the_app_is_not_on_the_stack) {
     PanelHarness h;
     h.launch("subcarrx");
 
-    /* Popped on the device rather than through request_home(), so the bridge
-     * still believes subcarrx is current while SubCarView has gone. */
+    /* Popped on the device rather than through request_home() -- the path a
+     * remote key press takes, which never goes near the launch queue.
+     * AppBridge::refresh() derives the current app from the navigation stack,
+     * so with the view gone the truthful answer is Home: not this app's data,
+     * and not this app's name over an empty version of it. Before that
+     * derivation the bridge went on believing the app was current and the
+     * provider's own "... is not the open app." guard is what answered here.
+     * That guard is still in the provider; the bridge simply no longer asks a
+     * provider about an app that is not on the stack. */
     h.nav.pop_to_root();
     h.nav.service();
 
     const std::string panel = refreshed_panel_json();
     CHECK(json_has(panel, "\"panel_kind\":\"screen\""));
-    CHECK(json_has(panel, "SubCar is not the open app."));
+    CHECK(json_has(panel, "Home -- no app is open."));
+    /* The stale id is what this change fixed; pin it, not just the text. */
+    CHECK(json_has(panel, "\"app_id\":\"\""));
     /* Emphatically not an empty table, which would be indistinguishable from a
      * running receiver that has decoded nothing. */
     CHECK(!json_has(panel, "\"columns\""));
@@ -642,7 +651,9 @@ TEST(two_tone_panel_provider_says_so_honestly_when_the_app_is_not_on_the_stack) 
 
     const std::string panel = refreshed_panel_json();
     CHECK(json_has(panel, "\"panel_kind\":\"screen\""));
-    CHECK(json_has(panel, "2-Tone RX is not the open app."));
+    CHECK(json_has(panel, "Home -- no app is open."));
+    /* The stale id is what this change fixed; pin it, not just the text. */
+    CHECK(json_has(panel, "\"app_id\":\"\""));
     CHECK(!json_has(panel, "\"columns\""));
 }
 
@@ -683,6 +694,8 @@ TEST(weather_panel_provider_says_so_honestly_when_the_app_is_not_on_the_stack) {
 
     const std::string panel = refreshed_panel_json();
     CHECK(json_has(panel, "\"panel_kind\":\"screen\""));
-    CHECK(json_has(panel, "Weather/TPMS is not the open app."));
+    CHECK(json_has(panel, "Home -- no app is open."));
+    /* The stale id is what this change fixed; pin it, not just the text. */
+    CHECK(json_has(panel, "\"app_id\":\"\""));
     CHECK(!json_has(panel, "\"columns\""));
 }

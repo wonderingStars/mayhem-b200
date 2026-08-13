@@ -62,6 +62,274 @@ constexpr size_t kSpectrumSamples = 4096;
 
 }  // namespace
 
+/* --- Gapless raw sample tap -------------------------------------------------
+ *
+ * Memory ordering, since this is the only lock-free code in the receive path
+ * that two threads write to.
+ *
+ * The data path is a textbook single-producer / single-consumer ring over
+ * absolute (never wrapped) 64-bit positions. The producer owns write_, the
+ * consumer owns read_. The producer stores write_ with release after filling
+ * the slots, and the consumer loads it with acquire before touching them, so
+ * every sample it copies out is a sample the producer has finished writing.
+ * Symmetrically the consumer stores read_ with release after copying out, and
+ * the producer loads it with acquire before computing free space, so the
+ * producer never overwrites a slot the consumer is still reading. Nothing else
+ * is needed: absolute positions make "full" and "empty" distinguishable without
+ * sacrificing a slot, and a 64-bit position cannot wrap in any deployment.
+ *
+ * The tear protocol adds one more pairing. tear_pos_ is stored relaxed and then
+ * published by the release store to torn_; the consumer's acquire load of torn_
+ * is what makes that position visible. The consumer clears torn_ with release
+ * only AFTER its release store to read_, so a producer that observes torn_
+ * false has necessarily also observed the drained read_.
+ *
+ * gap_pending_ is published by the producer BEFORE the samples it precedes are
+ * committed, and the consumer exchanges it AFTER its acquire load of write_.
+ * That order guarantees the direction that matters: the consumer can never see
+ * post-gap samples without also seeing the gap, so a hole is never reported
+ * late and never lands inside a block the consumer believes is contiguous.
+ *
+ * The converse does NOT hold, deliberately, and any consumer migrating to this
+ * tap has to be built for it. A read that lands between the gap's publication
+ * and the store to write_ gets {samples = 0, lost_before = G}: the hole
+ * arrives one read BEFORE the samples it precedes. That is not a corner case —
+ * it is the normal outcome whenever the consumer polls faster than the DSP
+ * thread produces, and it was measured at 5 178 420 of 5 182 326 holes
+ * (99.92%) in a hostile-polling run. It is also the safe direction: a
+ * demodulator that resets on lost_before resets slightly early, before the
+ * discontinuity reaches it, rather than after it has already been fed a
+ * splice. Handle `samples == 0 && lost_before != 0` — do not treat an empty
+ * block as "nothing happened". ui_adsb_rx.cpp's pump() is the worked example.
+ *
+ * The control path (open / restart / close, which reallocate the buffer) uses a
+ * Dekker handshake rather than a mutex: the producer publishes producer_in_ and
+ * then re-reads enabled_, both seq_cst, so a concurrent close() either sees the
+ * producer inside and waits for it, or the producer sees the tap closed and
+ * never touches the buffer. The waiting is done by the control thread; the DSP
+ * thread is never made to wait for anything.
+ */
+
+size_t RawSampleTap::capacity_for(double rate_hz, double seconds) {
+    if (!(rate_hz > 0.0) || !(seconds > 0.0)) return kMinCapacitySamples;
+
+    const double want = rate_hz * seconds;
+    if (want <= static_cast<double>(kMinCapacitySamples)) return kMinCapacitySamples;
+    if (want >= static_cast<double>(kMaxCapacitySamples)) return kMaxCapacitySamples;
+    return static_cast<size_t>(want);
+}
+
+RawSampleTap::~RawSampleTap() {
+    close();
+}
+
+void RawSampleTap::drain_producer() {
+    enabled_.store(false, std::memory_order_seq_cst);
+    /* The producer's critical section is one memcpy of a DSP block, so this
+     * spins for microseconds at most — and it is the caller's thread that
+     * spins, never the DSP thread. */
+    while (producer_in_.load(std::memory_order_seq_cst)) std::this_thread::yield();
+}
+
+void RawSampleTap::restart_stream() {
+    /* Whatever was buffered belongs to the stream that just ended; it is not
+     * adjacent in time to what comes next, so it is loss, and loss is reported
+     * rather than swept up. */
+    const uint64_t unread = write_.load(std::memory_order_relaxed) -
+                            read_.load(std::memory_order_relaxed);
+    if (unread != 0) {
+        dropped_.fetch_add(unread, std::memory_order_relaxed);
+        gap_pending_.fetch_add(unread, std::memory_order_relaxed);
+    }
+
+    /* A tear in progress is already counted in dropped_, but it has not been
+     * announced yet — the producer only publishes a hole when it writes the
+     * samples that follow it, and here there will be no such write. Publish it
+     * now, or a restart during an overflow would hide the loss from the only
+     * report that says WHERE the stream broke. It precedes the next samples the
+     * consumer sees, exactly like the unread ones above. */
+    if (episode_gap_ != 0) gap_pending_.fetch_add(episode_gap_, std::memory_order_relaxed);
+
+    write_.store(0, std::memory_order_relaxed);
+    read_.store(0, std::memory_order_relaxed);
+    tear_pos_.store(0, std::memory_order_relaxed);
+    torn_.store(false, std::memory_order_relaxed);
+    episode_gap_ = 0;
+}
+
+bool RawSampleTap::open(size_t capacity_samples) {
+    if (capacity_samples == 0) return false;
+
+    drain_producer();
+
+    buffer_.resize(capacity_samples);
+    buffer_.shrink_to_fit();
+    capacity_.store(buffer_.size(), std::memory_order_relaxed);
+    restart_stream();
+
+    enabled_.store(true, std::memory_order_seq_cst);
+    return true;
+}
+
+void RawSampleTap::restart(size_t capacity_samples) {
+    if (!is_open() || capacity_samples == 0) return;
+    open(capacity_samples);
+}
+
+void RawSampleTap::close() {
+    drain_producer();
+
+    /* Anything still buffered is now unreachable, so account for it. */
+    restart_stream();
+
+    /* ...but do NOT leave the hole queued for announcement. restart_stream()
+     * pushes it into gap_pending_ so that a consumer who keeps reading learns
+     * where the stream broke, and after a close there is no such consumer: the
+     * subscription is over. The next read of this slot belongs to whoever calls
+     * open() next, which is a NEW subscription on a NEW stream, and charging
+     * them a hole from the previous one is a lie about their data. The samples
+     * stay counted in dropped_, which is a lifetime total and is true.
+     *
+     * This was live. ~AdsbRxView calls disable_raw_tap() and a later on_show()
+     * calls enable_raw_tap() on the one process-lifetime ReceiverModel, so
+     * every relaunch of the app opened with a fabricated gap the size of
+     * whatever was unread — up to the whole ring — which inflated its
+     * "lost N in M" readout, dragged air_fraction() below the truth, and forced
+     * one pointless demod_.reset() on the first pump. */
+    gap_pending_.store(0, std::memory_order_relaxed);
+
+    std::vector<dsp::cfloat>{}.swap(buffer_);
+    capacity_.store(0, std::memory_order_relaxed);
+}
+
+void RawSampleTap::reset_stats() {
+    offered_.store(0, std::memory_order_relaxed);
+    delivered_.store(0, std::memory_order_relaxed);
+    dropped_.store(0, std::memory_order_relaxed);
+    overflows_.store(0, std::memory_order_relaxed);
+}
+
+size_t RawSampleTap::available() const {
+    /* read_ FIRST. Both positions only ever advance, and write_ is never behind
+     * read_ at any real instant — but these are two separate loads, so an
+     * observer that is neither the producer nor the consumer can pair a stale
+     * write_ with a fresher read_ and underflow the subtraction. That reported
+     * about 1.8e19 samples buffered in a 4096-slot ring (measured: 512 such
+     * readings in 236 million polls, worst 2^64 - 64, exactly one producer
+     * block of underflow).
+     *
+     * Loading the consumer's position first makes that impossible: whatever
+     * write_ we then see is at least as new as the read_ we already have, so
+     * the difference cannot go negative. It can still be stale-HIGH by however
+     * much the producer committed in between, which the clamp bounds — the ring
+     * cannot hold more than its capacity, so any larger answer is not a
+     * conservative estimate, it is a wrong one.
+     *
+     * On the consumer's own thread, which is where the accounting invariant is
+     * checked, read_ cannot move underneath us and the result is exact. */
+    const uint64_t r = read_.load(std::memory_order_acquire);
+    const uint64_t w = write_.load(std::memory_order_acquire);
+    const uint64_t n = (w > r) ? (w - r) : 0;
+
+    const size_t cap = capacity_.load(std::memory_order_acquire);
+    return (n > static_cast<uint64_t>(cap)) ? cap : static_cast<size_t>(n);
+}
+
+void RawSampleTap::write(const dsp::cfloat* data, size_t count) {
+    /* Announce first, then re-check: with both operations sequentially
+     * consistent, a concurrent close() cannot slip between them. Either it sees
+     * producer_in_ and waits, or we see the tap closed and leave the buffer
+     * alone. */
+    producer_in_.store(true, std::memory_order_seq_cst);
+    if (enabled_.load(std::memory_order_seq_cst) && data != nullptr && count != 0)
+        produce(data, count);
+    producer_in_.store(false, std::memory_order_release);
+}
+
+void RawSampleTap::produce(const dsp::cfloat* data, size_t count) {
+    const size_t cap = capacity_.load(std::memory_order_relaxed);
+    if (cap == 0) return;
+
+    offered_.fetch_add(count, std::memory_order_relaxed);
+
+    if (torn_.load(std::memory_order_acquire)) {
+        /* Still waiting for the consumer to reach the seam. Everything now is
+         * part of the same hole; writing it would put that hole in the middle
+         * of a block the consumer believes is contiguous. */
+        episode_gap_ += count;
+        dropped_.fetch_add(count, std::memory_order_relaxed);
+        return;
+    }
+
+    /* First write after a hole: publish its size before the samples that follow
+     * it become visible. */
+    if (episode_gap_ != 0) {
+        gap_pending_.fetch_add(episode_gap_, std::memory_order_release);
+        episode_gap_ = 0;
+    }
+
+    const uint64_t w = write_.load(std::memory_order_relaxed);
+    const uint64_t r = read_.load(std::memory_order_acquire);
+    const size_t buffered = static_cast<size_t>(w - r);
+    const size_t free_slots = cap - buffered;
+    const size_t n = (count < free_slots) ? count : free_slots;
+
+    if (n != 0) {
+        const size_t head = static_cast<size_t>(w % cap);
+        const size_t first = std::min(n, cap - head);
+        std::copy(data, data + first, buffer_.data() + head);
+        if (n > first) std::copy(data + first, data + n, buffer_.data());
+        write_.store(w + n, std::memory_order_release);
+    }
+
+    if (n < count) {
+        const size_t lost = count - n;
+        dropped_.fetch_add(lost, std::memory_order_relaxed);
+        overflows_.fetch_add(1, std::memory_order_relaxed);
+        episode_gap_ += lost;
+        tear_pos_.store(w + n, std::memory_order_relaxed);
+        torn_.store(true, std::memory_order_release);
+    }
+}
+
+RawSampleTap::Block RawSampleTap::read(std::vector<dsp::cfloat>& out) {
+    Block block{};
+
+    const size_t cap = capacity_.load(std::memory_order_relaxed);
+    const uint64_t r = read_.load(std::memory_order_relaxed);
+    const uint64_t w = write_.load(std::memory_order_acquire);
+
+    /* After the acquire on write_, so a gap can never arrive later than the
+     * samples it precedes. */
+    block.lost_before = gap_pending_.exchange(0, std::memory_order_acq_rel);
+
+    const size_t n = (cap == 0) ? 0 : static_cast<size_t>(w - r);
+    out.resize(n);
+
+    if (n != 0) {
+        const size_t head = static_cast<size_t>(r % cap);
+        const size_t first = std::min(n, cap - head);
+        std::copy(buffer_.data() + head, buffer_.data() + head + first, out.data());
+        if (n > first)
+            std::copy(buffer_.data(), buffer_.data() + (n - first), out.data() + first);
+
+        read_.store(r + n, std::memory_order_release);
+        delivered_.fetch_add(n, std::memory_order_relaxed);
+        block.samples = n;
+    }
+
+    /* Reaching the seam exactly is what lets the producer start again. Checking
+     * the position rather than just the flag matters: the producer may have
+     * torn after this read's snapshot of write_, in which case we have not in
+     * fact drained to the seam and must leave it standing. */
+    if (torn_.load(std::memory_order_acquire) &&
+        (r + n) == tear_pos_.load(std::memory_order_relaxed)) {
+        torn_.store(false, std::memory_order_release);
+    }
+
+    return block;
+}
+
 ReceiverModel::ReceiverModel(RadioDevice& radio, audio::AudioOut& audio_out)
     : radio_{radio},
       audio_{audio_out} {
@@ -125,6 +393,13 @@ bool ReceiverModel::start() {
 
     radio_.set_rx_rate(sample_rate_);
     sample_rate_ = radio_.rx_rate();
+
+    /* Re-size the gapless tap for the rate the hardware actually gave us. It is
+     * sized in time, so the sample count has to move with the rate; leaving it
+     * alone would make a faster rate hold proportionally less air, which is the
+     * exact trap that makes raising the sample rate look like a regression. */
+    if (raw_tap_.is_open())
+        raw_tap_.restart(RawSampleTap::capacity_for(sample_rate_, raw_tap_seconds_));
 
     /* Let the analog filter pass the whole captured band; anything narrower is
      * the channel filter's job and doing it in the AD936x would fight the NCO. */
@@ -271,6 +546,16 @@ bool ReceiverModel::take_spectrum_samples(std::vector<dsp::cfloat>& out, size_t 
                spectrum_buffer_.end());
     spectrum_ready_ = false;
     return true;
+}
+
+bool ReceiverModel::enable_raw_tap(double history_seconds) {
+    if (!(history_seconds > 0.0)) history_seconds = RawSampleTap::kDefaultHistorySeconds;
+    raw_tap_seconds_ = history_seconds;
+    return raw_tap_.open(RawSampleTap::capacity_for(sample_rate_, history_seconds));
+}
+
+void ReceiverModel::disable_raw_tap() {
+    raw_tap_.close();
 }
 
 /* --- IQ capture ------------------------------------------------------------ */
@@ -453,6 +738,12 @@ void ReceiverModel::dsp_thread_main() {
                       spectrum_buffer_.end() - static_cast<ptrdiff_t>(n));
             spectrum_ready_ = true;
         }
+
+        /* Gapless tap: the same pre-channel-filter samples, but all of them and
+         * in order, for decoders that cannot afford the holes the snapshot
+         * above leaves between polls. Closed unless an app asked for it, in
+         * which case this costs two atomics. */
+        raw_tap_.write(raw.data(), got);
 
         /* Capture tap, before any channel filtering, so the file holds the full
          * captured band exactly as the radio delivered it. */

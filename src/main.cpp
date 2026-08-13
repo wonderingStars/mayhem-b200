@@ -20,6 +20,7 @@
 #include "remote/app_bridge.hpp"
 #include "remote/remote_server.hpp"
 #include "ui/display.hpp"
+#include "ui/input.hpp"
 #include "ui/theme.hpp"
 #include "ui/ui_painter.hpp"
 #include "ui/ui_widget.hpp"
@@ -32,6 +33,7 @@
 #include <memory>
 #include <string>
 #include <thread>
+#include <vector>
 
 #if defined(_WIN32)
 #include <windows.h>  /* GetModuleFileNameW for the bundled-images lookup */
@@ -116,8 +118,11 @@ void print_help() {
         "  --scale=<1..6>          Window magnification (default 2)\n"
         "  --list                  List attached USRP devices and exit (uhd only)\n"
         "  --portal[=port]         Serve the JSON web portal API (default port 8090).\n"
-        "                          LAN-reachable, unauthenticated: same trust as a\n"
-        "                          terminal on this machine. Off unless given.\n"
+        "                          LAN-reachable and unauthenticated. Off unless given.\n"
+        "                          It streams the screen and accepts input, so anyone\n"
+        "                          who can reach the port can operate this radio,\n"
+        "                          transmit apps included -- including a web page you\n"
+        "                          merely visit, which can post to 127.0.0.1.\n"
         "  --help                  This text\n"
         "\n"
         "Controls: arrows navigate and tune, Enter selects, Esc goes back,\n"
@@ -273,6 +278,29 @@ int main(int argc, char** argv) {
         }
         if (!running) break;
 
+        /* Remote input joins the local queue's stream right here, so a portal
+         * client's key reaches EventDispatcher on the same thread and in the
+         * same frame a local one would. The two-step for keys is copied from
+         * window.cpp/window_linux.cpp verbatim: the long-press timer is fed
+         * by both transitions, but only the press dispatches an Event.
+         * dispatch()'s return is ignored on purpose — false means Quit, and
+         * the portal must not be able to close the application (the queue
+         * cannot carry one; see remote::parse_input_events). */
+        if (options.portal_enabled) {
+            std::vector<remote::RemoteInput> remote_input;
+            if (remote::AppBridge::instance().drain_input_queue(remote_input)) {
+                for (const auto& ri : remote_input) {
+                    if (ri.action == remote::RemoteInput::Action::KeyUp) {
+                        input::note_key_up(ri.event.key);
+                        continue;
+                    }
+                    if (ri.action == remote::RemoteInput::Action::KeyDown)
+                        input::note_key_down(ri.event.key, input::now_ms());
+                    dispatcher.dispatch(ri.event);
+                }
+            }
+        }
+
         /* Applies any queued portal launch()/home() request before service()
          * so the same frame's service() call both performs it and reports
          * the change, exactly as a locally-driven push/pop would. */
@@ -299,6 +327,13 @@ int main(int argc, char** argv) {
         system_view.on_frame_sync();
         painter.paint_widget_tree(&system_view);
         window.present();
+
+        /* After present(), not before: the framebuffer only holds this frame
+         * once paint_widget_tree() has run, and capturing from inside
+         * refresh() above would publish the previous one. Reads the display's
+         * non-destructive damage counter, so it cannot steal present()'s
+         * repaint signal on either platform. */
+        if (options.portal_enabled) remote::AppBridge::instance().capture_screen_frame();
 
         /* ~60 Hz, sleeping against an absolute deadline so a slow frame does
          * not make every later frame late. */

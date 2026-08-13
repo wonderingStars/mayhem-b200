@@ -109,7 +109,7 @@ func TestPanel_NoStructuredView(t *testing.T) {
 	defer ts.Close()
 
 	c := New(ts.URL, time.Second)
-	p, err := c.Panel(context.Background())
+	p, err := c.Panel(context.Background(), "")
 	if err != nil {
 		t.Fatalf("Panel: %v", err)
 	}

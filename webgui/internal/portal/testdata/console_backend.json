@@ -1,0 +1,10 @@
+{
+  "lines": [
+    "POCSAG512 decoder started",
+    "\u001b\u000ePOCSAG512\u001b\u0010 addr=1001001 func=3 \u001b\u000bALPHA\u001b\u0010 Ambulance requested at Main St / 5th Ave",
+    "\u001b\ferror\u001b\u0010 BCH decode failed, dropped frame",
+    "POCSAG1200 addr=2200441 func=0 numeric 4102",
+    "\u001b\u000ePOCSAG512\u001b\u0010 addr=1001001 func=3 \u001b\u000bALPHA\u001b\u0010 Cancel previous, unit already on scene",
+    "\u001b\u0002ok\u001b\u0010 squelch closed"
+  ]
+}

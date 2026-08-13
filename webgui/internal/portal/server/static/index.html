@@ -5,32 +5,57 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
 <title>mayhem-b200 portal</title>
 <link rel="icon" href="data:,">
-<link rel="stylesheet" href="app.css">
-<!-- panels/*.js's own look (--mp-* prefixed vars, .mp-* classes -- never
-     collides with app.css); see panels/registry.js and ../../PANELS.md. -->
+
+<!-- Fonts are served from the same go:embed FS as everything else, so the
+     portal still renders correctly on an air-gapped machine. Never point
+     these at Google Fonts or any other external host. The crossorigin
+     attribute is required even same-origin: font fetches are always CORS
+     mode, and without it the preload is discarded and fetched twice. -->
+<link rel="preload" as="font" type="font/woff2" href="fonts/fragment-mono-400.woff2" crossorigin>
+<link rel="preload" as="font" type="font/woff2" href="fonts/archivo-500.woff2" crossorigin>
+<link rel="preload" as="font" type="font/woff2" href="fonts/archivo-800-italic.woff2" crossorigin>
+
+<!-- panels/*.js's own look (.mp-* classes -- never collides with app.css);
+     see panels/registry.js and ../../PANELS.md. It loads FIRST and app.css
+     LAST on purpose: app.css is the single source of the --mp-* design
+     tokens, and loading it second means a leftover :root in panels.css
+     cannot win the cascade and repaint the shell in the old palette. -->
 <link rel="stylesheet" href="panels/panels.css">
+<!-- Sizing and motion for the animated app icons. Everything in it is scoped
+     under .mpi (the class icons.js puts on every SVG it hands out), so its
+     position in the cascade is free; it sits before app.css only to keep the
+     "app.css is last, and owns the tokens" rule above true without exception. -->
+<link rel="stylesheet" href="icons.css">
+<link rel="stylesheet" href="app.css">
 </head>
 <body>
 <div id="app">
 
   <header class="topbar">
     <div class="brand">
-      <span class="brand-mark">mayhem<span class="accent">b200</span></span>
-      <span class="brand-sub">app portal</span>
+      <span class="brand-mark">MAYHEM<span class="accent">-B200</span></span>
+      <span class="brand-sub">web portal</span>
     </div>
+    <span class="topbar-rule" aria-hidden="true"></span>
     <div class="status-cluster" id="statusCluster">
+      <!-- stDevice is the only item allowed to shrink; app.css gives it
+           min-width:0 so a long device name ellipses instead of shoving the
+           clock and version off the end of the bar. -->
       <span class="status-item" id="stDevice">
         <span class="dot off" id="stConnDot"></span>
         <span id="stDeviceText">connecting&hellip;</span>
       </span>
-      <span class="status-item mono" id="stRx">
+      <span class="status-item" id="stRx">
         <span class="rxtx-chip" id="stRxChip">RX</span>
       </span>
-      <span class="status-item mono" id="stTx">
+      <span class="status-item" id="stTx">
         <span class="rxtx-chip" id="stTxChip">TX</span>
       </span>
+      <span class="status-item clock" id="stClock" aria-label="Local time"></span>
+      <span class="topbar-rule" aria-hidden="true"></span>
       <span class="status-item version" id="stVersion"></span>
     </div>
   </header>
@@ -58,7 +83,11 @@
           </svg>
           <input type="search" id="searchInput" placeholder="Search apps&hellip;" autocomplete="off" spellcheck="false">
         </div>
-        <div class="chip-row" id="categoryChips" role="tablist" aria-label="Filter by category"></div>
+        <!-- role="group", not "tablist": these are filter toggles, not tabs.
+             They select nothing, they own no tabpanel, and activating one
+             leaves the same grid on screen with fewer tiles in it. app.js
+             builds each as a button with aria-pressed. -->
+        <div class="chip-row" id="categoryChips" role="group" aria-label="Filter by category"></div>
       </div>
 
       <div id="categorySections"></div>
@@ -91,12 +120,38 @@
 
 <div id="toast" aria-live="polite"></div>
 
+<script>
+// Wall clock for the top bar. It lives here rather than in app.js because it
+// is shell chrome with no backend involvement -- nothing about it comes from
+// /api, so it must keep ticking even while the backend is down. setInterval
+// rather than requestAnimationFrame: rAF is throttled to a standstill in a
+// background tab, and this portal is left open for hours on a second monitor.
+(function () {
+  var el = document.getElementById('stClock');
+  if (!el) return;
+  function pad(n) { return (n < 10 ? '0' : '') + n; }
+  function tick() {
+    var d = new Date();
+    el.textContent = pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds());
+  }
+  tick();
+  setInterval(tick, 1000);
+})();
+</script>
+
+<!-- The animated app-icon set (window.MayhemIcons). Loaded BEFORE app.js so
+     the very first grid build already has a provider: app.js also listens for
+     a late `mayhem-icons-ready`, but relying on that would leave the fallback
+     glyph visible for one paint on every load. -->
+<script src="icons.js"></script>
 <script src="app.js"></script>
-<!-- The richer panel renderers (table/spectrum/receiver/console/map/screen;
-     see ../../PANELS.md). registry.js must load before the per-kind files;
-     bridge.js must load last -- it wires MayhemPanels into app.js's own
-     MayhemPortal.registerPanel(), overriding app.js's minimal built-in
-     "table" with this richer one and adding the kinds app.js doesn't have. -->
+<!-- The richer panel renderers (table/spectrum/receiver/console/map/image/
+     geotable/screen; see ../../PANELS.md). registry.js must load before the
+     per-kind files; bridge.js must load last -- it wires MayhemPanels into
+     app.js's own MayhemPortal.registerPanel(), overriding app.js's minimal
+     built-in "table" with this richer one and adding the kinds app.js doesn't
+     have. geotable.js composes the map and table renderers at call time, not
+     at load time, so its position among them does not matter. -->
 <script src="panels/registry.js"></script>
 <script src="panels/table.js"></script>
 <script src="panels/spectrum.js"></script>
@@ -104,7 +159,14 @@
 <script src="panels/console.js"></script>
 <script src="panels/map.js"></script>
 <script src="panels/adsb.js"></script>
+<script src="panels/image.js"></script>
+<script src="panels/geotable.js"></script>
 <script src="panels/screen.js"></script>
+<!-- The live screen-streaming view (MBSF frames over /api/screen/ws, input
+     back over the same socket). Not a panels/*.js file: it is a view of the
+     device itself rather than of one app's published data, so it is not a
+     panel kind and the panels wiring test does not cover it. -->
+<script src="screenview.js"></script>
 <script src="panels/bridge.js"></script>
 </body>
 </html>

@@ -239,6 +239,55 @@ Monospace, autoscroll (pauses itself if the user scrolls up, with a "N new ↓" 
 resume), lines are appended/deduped by `seq` so re-sending the whole buffer every poll
 is cheap client-side, and the DOM is capped at `max_lines` (default 1000).
 
+#### The C++ backend's flat shape
+
+As with `table`, the shape above is what this panel is *designed* around and not what
+the C++ backend sends. `src/remote/app_data.cpp`'s `to_json(ConsoleData)` — the funnel
+for every `PanelKind::Console` — emits bare strings and nothing else:
+
+```jsonc
+{ "lines": ["sync acquired", "POCSAG512 addr=1001001 …"] }
+```
+
+no `seq`, no `ts_ms`, no `app_name`, no `max_lines`. Fed here verbatim, `line.text` was
+`undefined` on every line, so the panel drew the right *number* of rows, every one of
+them blank, and counted them as real content. `console.js` therefore normalizes the
+flat shape to `{seq: <array index>, text}`; data already in the documented shape is
+returned untouched and still dedupes by its real `seq`.
+
+**No timestamp is synthesized.** `ts_ms` is left absent rather than filled with the
+moment the browser polled, and the time column is suppressed for these lines — the
+same rule that removed the `table` panel's `Age` column for the flat shape. A line's
+real age is unknown, and "now" is a lie about it.
+
+**`seq` is a position, not an identity, and the renderer does not treat it as one.**
+`ui::Console` bounds its `std::deque` at `max_lines` (256 by default) and pops the
+front once full (`src/ui/ui_widget.cpp`, `Console::write`), so what a poll returns is a
+sliding window: after the buffer wraps, index 0 is a different line than it was last
+time. Deduping on that index — the obvious reading of "append by `seq`" — would
+silently stop showing new lines from the 257th onward, on exactly the long-running
+decode session this panel exists for. So the flat shape is diffed by **content**: the
+longest tail of what is already on screen that matches the head of the new buffer is
+the overlap, and only what follows it is appended. Repeated identical lines resolve
+toward the longer match, i.e. toward appending less, which can never duplicate.
+A backend that later grows a real monotonic sequence number should send the documented
+shape and gets identity-based dedup back for free.
+
+**The four shipping backends send no colour escapes.** `ui::Console` stores them
+(the apps write `STR_COLOR_*` inline and the device's `Painter`, not the app, is
+what consumes them), but `console_data_from()` — the single reader behind POCSAG,
+ACARS, FLEX and Tetra, in `src/remote/provider_acars.cpp` — runs every line through
+`strip_color_escapes()` first, including the escapes `Console::write()`'s wrapping
+splits across two lines. So no `0x1B` reaches the wire from any panel shipping
+today, and `console.js`'s `TERM_COLORS` parser is currently exercised only by the
+fixture and by the documented rich shape.
+
+`testdata/console_backend.json` keeps its escapes deliberately: it is the flat
+`{"lines":[...]}` envelope carrying the raw text a `ui::Console` holds *before*
+stripping, which is what keeps the escape parser covered and what a future backend
+forwarding lines verbatim would send. It is wired to its own harness button. Do not
+read it as a capture of what the C++ side emits — for that, the escapes come off.
+
 ### `map`
 
 ```jsonc
@@ -256,8 +305,39 @@ cosine x-correction, a lat/lon graticule that thins out as you zoom in, pan by d
 zoom by wheel/buttons, "fit to markers" on first load and on demand. `heading`
 (degrees, optional) rotates a marker's arrow glyph; without it, a plain dot. `kind`
 picks a colour (`aircraft`/`vessel`/anything else); click a marker for a detail
-tooltip. Used by ADS-B/APRS today, but the shape is generic to "things with a
-position".
+tooltip.
+
+WardriveMap is the only backend that publishes this kind directly
+(`src/remote/provider_wardrive.cpp`); ADS-B has its own richer kind and APRS/AIS
+publish `geotable`, which mounts this renderer as its upper half.
+
+#### The C++ backend's marker shape
+
+As with `table` and `console`, the shape above is the renderer's, not the wire's.
+`src/remote/app_data.cpp`'s `to_json(MapData)` emits `{lat, lon, label,
+heading_deg?}` — the heading named for its unit (as the `adsb` panel names it), and
+**no `id` at all**:
+
+```jsonc
+{ "app_name": "WardriveMap", "markers": [ { "lat": 51.47, "lon": -0.4543,
+  "label": "BT-Hub-4021", "heading_deg": 272 } ] }
+```
+
+`panels/map.js` normalizes that in `normalizeMarkers()` before drawing, and every
+host of the renderer goes through it. Both differences had teeth:
+
+- reading only `heading` meant a marker that said which way it was pointing was
+  drawn as a plain dot. Absent in both spellings still means a dot — never a 0 that
+  would read as "due north".
+- marker selection is keyed on `id`. With none on the wire every marker compared
+  equal, so one click highlighted *all* of them and the tooltip printed the first
+  marker's name and coordinates — a real value belonging to a different entity. The
+  synthesized key is `label` (the entry's own identity in every app that publishes a
+  position) falling back to the array index, and it is never displayed: the tooltip
+  prints `label || id`.
+
+Do not re-add that adaptation in a caller. `geotable.js` used to carry its own copy,
+which is exactly why the direct `map` kind went without one.
 
 ### `adsb`
 
@@ -377,6 +457,97 @@ itself is unmodified. Three things follow from that, and are deliberate:
 keeps a trail only for the aircraft whose detail page is open. They start over on
 reload; nothing else depends on them.
 
+### `image`
+
+The picture an image-producing RX app is building up — NOAA APT, WeFax, SSTV — at
+full resolution in the browser instead of squeezed into the device's 240x320 screen.
+
+```jsonc
+{
+  "app_name": "SSTV RX",            // optional
+  "width": 240, "height": 202,
+  "format": "rgb888",               // the only format this panel decodes
+  "rev": 202,                       // increments when the image content changes
+  "data_b64": "…",                  // base64 of width*height*3 bytes, rows top to bottom;
+                                    // OMITTED when the client already has this rev
+  "note": "no image decoded yet"    // optional, honest, never fabricated
+}
+```
+
+The client tells the backend which revision it is already holding by adding
+`?have_image_rev=N` to `GET /api/panel` (the portal passes the query through), and the
+backend omits `data_b64` when it would only be re-sending pixels the browser has.
+**An update without `data_b64` therefore keeps the picture already on screen** — that
+is the steady state, not an error.
+
+Drawn into a canvas whose backing store is exactly `width`x`height`, then CSS-scaled to
+fit the pane: whole-number multiples when upscaling (so each decoded pixel becomes an
+identical square block) and the fractional ratio when the pane is smaller than the
+image, with `image-rendering: pixelated` throughout. Smoothing is off deliberately —
+these rasters are small and interpolation would invent detail the demodulator never
+produced. Re-fitting on container resize changes only the CSS size, never the backing
+store, so it costs no redraw and no re-decode. **Save PNG** is `canvas.toDataURL`,
+entirely client-side: nothing round-trips and nothing is written on the device.
+
+Nothing is ever synthesized:
+
+- **`rev: 0` with no `data_b64` means nothing has been decoded**, and renders as the
+  `note`, never as a black rectangle that reads like a picture of a dark sky. That
+  also holds if it arrives *after* the panel had pixels (an app reset): the old
+  picture is dropped, because it is no longer of anything.
+- **A payload this panel cannot trust is not drawn.** An unrecognised `format`,
+  base64 that will not decode, or a byte count that is not exactly
+  `width * height * 3` all render as a message saying precisely that. A partial
+  image is never drawn from a short payload.
+- **The meta line only ever describes pixels actually on the canvas.** If the backend
+  announces a new `rev` but sends no bytes for it, the panel keeps the image it has
+  and says which rev that is, rather than letting a stale picture pass as current.
+
+Painting happens synchronously inside `render()`, never from `requestAnimationFrame`
+— rAF does not fire in a non-composited browser pane, which is where this gets
+verified (`panels/adsb.js`'s `drawNow` exists for the same reason).
+
+### `geotable`
+
+For apps whose entries *are* positions — AIS, APRS, WardriveMap: the map above the
+table it came from, in one panel.
+
+```jsonc
+{
+  "app_name": "AIS Boats",
+  "table": { "columns": ["MMSI", "Name/Call"],       // exactly the flat table shape above
+             "rows": [["244660320", "EVER GIVEN"]] },
+  "map":   { "markers": [
+    { "lat": 50.7712, "lon": -1.2984, "label": "EVER GIVEN", "heading_deg": 96, "kind": "vessel" }
+  ] }
+}
+```
+
+`geotable.js` composes rather than draws: it owns two child elements and calls
+`MayhemPanels.renderPanel("map", …)` and `renderPanel("table", …)` on them, so there is
+still exactly one map renderer and one table renderer in this repo and a fix to either
+lands here for free. It strips the two children's card chrome (they are each a full
+`.mp-panel` in their own right) and adds the one number neither half can show alone:
+**"N of M located"**.
+
+That number is the point of the kind. **Markers exist only for entries that have a real
+position fix**; an entry without one is in the table and not on the map. A station
+heard through a status or telemetry packet only, or a vessel that has broadcast its
+name but not its position, is emphatically not at 0°N 0°E — the backend enforces this
+(`provider_aprs.cpp`'s `has_position`, `provider_ais.cpp`'s `latitude.is_valid()`
+gate), and there is no path in `geotable.js` that derives a marker from a table row.
+
+Two adaptations happen between the contract's marker and the one `map.js` draws, and
+they are the only logic in the file:
+
+- `heading_deg` → `heading`. A marker with no heading keeps none, and `map.js` then
+  draws a dot rather than an arrow — never defaulted to `0`, which would read as
+  "heading due north".
+- An `id` is synthesized (from the label, falling back to the array index) purely so
+  `map.js`'s click-to-select can tell markers apart; with `id` undefined every marker
+  compares equal and one click selects all of them. It is a rendering key and is never
+  displayed as data.
+
 ### `screen` (fallback)
 
 ```jsonc
@@ -387,12 +558,52 @@ An honest card, not an error page: names the app, shows its category if given, a
 says plainly that it has no structured web view yet. This is also what
 `renderPanel` falls back to for an unregistered `kind`, with a synthesized `reason`.
 
+## Panels versus the live screen view
+
+`server/static/screenview.js` — the live 240x320 framebuffer streamed over
+`ws://…/api/screen/ws` as `MBSF` frames, with key/encoder/touch/char events posted
+back — **is not a panel and has no panel kind.** The distinction is what each one is a
+view *of*:
+
+- A **panel** renders one app's *published data*: a provider on the C++ side reads
+  state the app already keeps and shapes it into the JSON above. It exists only for
+  the apps that have a provider, and it is a browser-native view — sortable, sized to
+  the window, searchable — of information the device also draws in its own way.
+- The **screen view** renders *the device itself*. Every app draws into the same
+  framebuffer and every input funnels through `app::EventDispatcher::dispatch`, so
+  streaming that framebuffer out and routing input back operates all 94 apps, whether
+  or not any of them has a provider.
+
+They are complements, not alternatives: the screen view is always available and always
+faithful; a panel is available for fewer apps and is better where the browser genuinely
+beats a 240x320 screen (full-resolution images, searchable text streams, maps). Nothing
+in `panels/` talks to the screen socket, and `screenview.js` registers nothing with
+`MayhemPanels`, which is why `TestEmbeddedAssets_PanelScriptsAreWiredUp` — a
+`panels/*.js` ↔ `index.html` check in both directions — does not cover it; its
+`<script>` tag in `index.html` sits outside the `panels/` block and is commented as
+such.
+
+Note that the `screen` **panel kind** above is a different thing entirely with an
+unfortunately similar name: it is the static "this app has no structured web view yet"
+card, and it is also `renderPanel`'s fallback for an unregistered kind. It has not been
+repurposed.
+
 ## Fixtures
 
-`internal/portal/testdata/*.json` has one (or, for `spectrum`, two) fixture per kind,
+`internal/portal/testdata/*.json` has at least one fixture per kind (more where a kind
+has genuinely distinct states: `spectrum` active/idle, `image` decoded/cache-hit/
+nothing-decoded, and the C++ backend's own flat shapes for `table` and `console`),
 matching the shapes above exactly. `harness.html` (see below) is driven entirely from
 these files — there is no other source of demo data — so they double as the contract's
-executable documentation.
+executable documentation. (`TestFixturesAreServedAsIs` in `cmd/panels-harness` pins a
+named subset of them; fixtures added since, `adsb.json` included, are not in that list.)
+
+`testdata/image.json` carries a real 240x202 RGB888 payload (an SSTV-style test
+pattern, at the size `SstvImage` uses on the device) rather than a placeholder, because
+a base64 image fixture with no bytes in it would exercise none of the decode, the size
+check or the fit maths. `testdata/image_cached.json` is the same app at the same `rev`
+with `data_b64` omitted — load `image` first, then this, to see the panel hold the
+picture through a cache hit — and `testdata/image_none.json` is `rev: 0` with a note.
 
 ## Standalone harness
 
@@ -408,3 +619,22 @@ meant to. Pick a kind from the sidebar to load its fixture; "Simulate live updat
 re-renders on a timer with the fixture perturbed (spectrum bins jittered, table rows
 aged/added, console lines appended) to exercise the diffing/highlight/autoscroll paths
 a single static render can't show.
+
+Three of those simulations exist to reproduce a specific failure rather than to look
+busy, and are worth keeping that way:
+
+- **`console (C++ backend shape)`** appends a line per tick into a deliberately tiny
+  8-line window that slides, i.e. the wrap `ui::Console` does at `max_lines`. If new
+  lines stop appearing once the window first fills, the normalizer has regressed to
+  deduping by array index.
+- **`image`** alternates between sending `data_b64` and omitting it at the same `rev`,
+  which is exactly what the `have_image_rev` negotiation produces. The picture must
+  not flicker or blank on the omitted ticks.
+- **`geotable`** drifts the located contacts and, every few ticks, gives one of the
+  entries that has no position fix its first one, so "4 of 6 located" climbs to
+  "6 of 6" while the row count stays at 6 — the absent-position rule, visible.
+
+Panels diff against their own previous state and there is no unmount hook, so loading a
+second fixture of the *same* kind is an update, not a reset (that is what makes the
+`image` cache-hit button meaningful). Switching kinds clears the state; to see a kind
+from scratch again, switch away and back.

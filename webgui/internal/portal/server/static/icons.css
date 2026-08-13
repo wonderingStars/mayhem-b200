@@ -1,0 +1,234 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
+/* Part of mayhem-b200. */
+
+/*
+ * icons.css -- sizing and motion for the animated app icons built by icons.js.
+ *
+ * Everything here is scoped under .mpi (the class icons.js puts on every SVG
+ * root it hands out), so this file cannot collide with app.css or panels.css.
+ *
+ * ---------------------------------------------------------------------------
+ * THE TWO KNOBS A HOST SETS
+ * ---------------------------------------------------------------------------
+ * Both are inherited custom properties, so a host sets them once on any
+ * ancestor and every icon underneath follows:
+ *
+ *   --ics   animation-duration multiplier. 1 = the tuned speed, 2.6 = the
+ *           design's "calm" motion mode, 0.45 = the tile-hover speed-up.
+ *           Delays scale with it too, so a staggered icon stays in phase.
+ *   --icp   animation-play-state. `paused` is the design's "off" motion mode.
+ *
+ * Nothing in here reads either property directly from JS: they are pure CSS,
+ * which is the point -- the grid can drive them from a hover rule with no
+ * script running per icon.
+ *
+ * ---------------------------------------------------------------------------
+ * WHY THE KEYFRAMES ARE NOT IN THIS FILE
+ * ---------------------------------------------------------------------------
+ * The mp* keyframe library (mpPulse, mpBar, mpSpin, ...) belongs to the theme
+ * and is defined once in app.css, verbatim from doc/design-ref. Duplicating it
+ * here would mean two definitions of the same @keyframes names, where whichever
+ * stylesheet happens to load last silently wins -- so a future tweak to app.css
+ * could be reverted by this file with no visible cause. icons.js carries a
+ * verbatim copy that it injects ONLY when no mpPulse rule exists in the
+ * document at all (see ensureStyles there), which is a strictly additive
+ * fallback and cannot override a definition that is present.
+ *
+ * ---------------------------------------------------------------------------
+ * REDUCED MOTION
+ * ---------------------------------------------------------------------------
+ * Every icon is authored so that its resting (un-animated) attribute values
+ * are the legible state: bars sit at full height, scan bars sit at the top of
+ * their travel with a visible opacity, ping rings sit at their base radius,
+ * needles point straight up. Killing the animations therefore costs decoration
+ * and no information, which is what makes the media query below safe.
+ */
+
+/* ---------------------------------------------------------------------------
+ * Root
+ * -------------------------------------------------------------------------*/
+
+/* icons.js also sets width/height="100%" as attributes so an icon is still
+   correctly sized if this stylesheet fails to load; display:block kills the
+   inline-element baseline gap under it. */
+/* No overflow override: the SVG viewport clips at the 24x24 box, deliberately.
+   Every icon's full travel -- including the ping rings at their 1.12/1.6 peak
+   scale -- was measured to stay inside that box, so clipping costs nothing
+   today and stops a future icon from silently painting over its neighbour. */
+.mpi {
+  display: block;
+  width: 100%;
+  height: 100%;
+  color: inherit;
+}
+
+/* Probe hook: icons.js appends a throwaway element with this class and reads
+   --mpi-styles back to decide whether this stylesheet reached the document.
+   Keep the custom property and the off-screen positioning together. */
+.mpi-styles-probe {
+  position: absolute;
+  left: -9999px;
+  top: -9999px;
+  --mpi-styles: 1;
+}
+
+/* Transforms inside an SVG resolve against the element's own bounding box by
+   default, which is useless for a <line> or a <path> (degenerate boxes) and
+   unpredictable for a <g>. Pinning every animated child to the shared 24x24
+   viewBox instead means an icon can name its pivot in the same coordinates it
+   drew itself in: style="--o:12px 17.4px". */
+.mpi * {
+  transform-box: view-box;
+  transform-origin: var(--o, 12px 12px);
+}
+
+/* ---------------------------------------------------------------------------
+ * Motion classes
+ *
+ * One class per mp* keyframe. Each reads its duration through --dur so a
+ * single icon can retune it inline (a clock's sweep wants 6s where a radar's
+ * wants 3.2s) without inventing a second class, and multiplies by --ics so
+ * the host's motion control and the tile hover both work everywhere at once.
+ * -------------------------------------------------------------------------*/
+
+.mpi-pulse,
+.mpi-blink,
+.mpi-spin,
+.mpi-bar,
+.mpi-bar-c,
+.mpi-scan,
+.mpi-bob,
+.mpi-ping,
+.mpi-needle,
+.mpi-slide,
+.mpi-fall,
+.mpi-dash,
+.mpi-led,
+.mpi-marker {
+  animation-iteration-count: infinite;
+  animation-play-state: var(--icp, running);
+}
+
+.mpi-pulse {
+  animation-name: mpPulse;
+  animation-duration: calc(var(--dur, 2.6s) * var(--ics, 1));
+  animation-timing-function: ease-in-out;
+}
+
+.mpi-blink {
+  animation-name: mpBlink;
+  animation-duration: calc(var(--dur, 1.4s) * var(--ics, 1));
+  animation-timing-function: step-end;
+}
+
+.mpi-spin {
+  animation-name: mpSpin;
+  animation-duration: calc(var(--dur, 3.2s) * var(--ics, 1));
+  animation-timing-function: linear;
+}
+
+/* Bars grow from their own bottom edge, so this one wants the fill box after
+   all -- a <rect> has a real bounding box, unlike the paths above. Declared
+   after `.mpi *` on purpose: same specificity, later wins. */
+.mpi-bar {
+  animation-name: mpBar;
+  animation-duration: calc(var(--dur, 1.5s) * var(--ics, 1));
+  animation-timing-function: ease-in-out;
+  transform-box: fill-box;
+  transform-origin: 50% 100%;
+}
+
+/* Same, but growing from the middle -- the audio-equalizer read. */
+.mpi-bar-c {
+  animation-name: mpBar;
+  animation-duration: calc(var(--dur, 1.5s) * var(--ics, 1));
+  animation-timing-function: ease-in-out;
+  transform-box: fill-box;
+  transform-origin: 50% 50%;
+}
+
+/* mpScan travels 13 user units, which is why every icon that uses it is drawn
+   in the same 24-unit viewBox with its frame about 14 units tall. */
+.mpi-scan {
+  animation-name: mpScan;
+  animation-duration: calc(var(--dur, 2.8s) * var(--ics, 1));
+  animation-timing-function: linear;
+}
+
+.mpi-bob {
+  animation-name: mpBob;
+  animation-duration: calc(var(--dur, 3.4s) * var(--ics, 1));
+  animation-timing-function: ease-in-out;
+}
+
+.mpi-ping {
+  animation-name: mpPing;
+  animation-duration: calc(var(--dur, 2.8s) * var(--ics, 1));
+  animation-timing-function: ease-out;
+}
+
+.mpi-marker {
+  animation-name: mpMarkerPing;
+  animation-duration: calc(var(--dur, 2.6s) * var(--ics, 1));
+  animation-timing-function: ease-out;
+}
+
+.mpi-needle {
+  animation-name: mpNeedle;
+  animation-duration: calc(var(--dur, 3.6s) * var(--ics, 1));
+  animation-timing-function: ease-in-out;
+}
+
+.mpi-slide {
+  animation-name: mpSlideX;
+  animation-duration: calc(var(--dur, 3s) * var(--ics, 1));
+  animation-timing-function: ease-in-out;
+}
+
+.mpi-fall {
+  animation-name: mpFall;
+  animation-duration: calc(var(--dur, 2.6s) * var(--ics, 1));
+  animation-timing-function: linear;
+}
+
+/* mpDashFlow drives stroke-dashoffset to --dfo. Set --dfo to a whole multiple
+   of the element's dash period or the loop visibly jumps at the seam. */
+.mpi-dash {
+  animation-name: mpDashFlow;
+  animation-duration: calc(var(--dur, 1.6s) * var(--ics, 1));
+  animation-timing-function: linear;
+}
+
+/* mpLed animates opacity and box-shadow. box-shadow does not paint on SVG
+   geometry, so inside an icon this is an opacity throb -- the glow half of it
+   only shows on the HTML status dots the design uses elsewhere. */
+.mpi-led {
+  animation-name: mpLed;
+  animation-duration: calc(var(--dur, 2.2s) * var(--ics, 1));
+  animation-timing-function: ease-in-out;
+}
+
+/* Stagger. Scaled by --ics as well, so speeding an icon up on hover tightens
+   the offsets instead of smearing them out of phase with the durations. */
+.mpi-d1 { animation-delay: calc(0.18s * var(--ics, 1)); }
+.mpi-d2 { animation-delay: calc(0.36s * var(--ics, 1)); }
+.mpi-d3 { animation-delay: calc(0.54s * var(--ics, 1)); }
+.mpi-d4 { animation-delay: calc(0.72s * var(--ics, 1)); }
+
+/* Used where two halves of one icon should move in opposition (the transceiver
+   arrows) without a second keyframe. */
+.mpi-rev { animation-direction: reverse; }
+
+/* ---------------------------------------------------------------------------
+ * Reduced motion
+ *
+ * The animation library is decoration: see the header note on resting states.
+ * !important because the shorthand-free longhands above would otherwise still
+ * apply name and duration.
+ * -------------------------------------------------------------------------*/
+@media (prefers-reduced-motion: reduce) {
+  .mpi,
+  .mpi * {
+    animation: none !important;
+  }
+}

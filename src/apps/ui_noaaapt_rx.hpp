@@ -401,6 +401,11 @@ class ScanCanvas : public ui::Widget {
     void clear();
     int rows() const { return rows_; }
 
+    /* Read-only view of the preview framebuffer, for src/remote/provider_apt.cpp
+     * to publish to the web portal. Const by design: the portal only ever reads.
+     * Same idiom as AprsTableView::entries() (ui_aprs_rx.hpp). */
+    const std::vector<ui::Color>& pixels() const { return fb_; }
+
     void paint(ui::Painter& painter) override;
 
    private:
@@ -428,6 +433,10 @@ class NoaaAptRxView : public ui::View {
     void on_show() override;
     void on_hide() override;
     void on_frame_sync() override;
+
+    /* Read-only view of the decoded preview, for src/remote/provider_apt.cpp to
+     * publish to the web portal. Const by design: the portal only ever reads. */
+    const noaaapt::ScanCanvas& canvas() const { return canvas_; }
 
    private:
     void rebuild_chain();

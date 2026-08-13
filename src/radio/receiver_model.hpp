@@ -39,6 +39,198 @@
 
 namespace radio {
 
+/* --- Gapless raw sample tap -------------------------------------------------
+ *
+ * ReceiverModel::take_spectrum_samples() hands out the newest N samples of a
+ * sliding window, so a consumer polling it once per UI frame sees only
+ * (N / sample_rate) * poll_hz of the air — 12.3% at 2 Msps, 4096 samples and
+ * 60 Hz, and *less* as the sample rate rises, because the window is a fixed
+ * sample count and a faster rate makes it a shorter time. That is right for a
+ * waterfall, which only wants a recent snapshot, and wrong for a decoder, which
+ * wants every sample.
+ *
+ * RawSampleTap is the decoder's side of that trade: a lock-free ring the DSP
+ * thread fills and one consumer drains, handing back every sample that arrived
+ * since the consumer's previous read, in order, with any loss counted and
+ * placed rather than silent.
+ *
+ * Threading contract:
+ *
+ *  - write() is called only by the DSP thread. It never blocks, never
+ *    allocates, and never waits on the consumer: if the ring is full it
+ *    discards, counts, and returns. Blocking here would back up the radio's own
+ *    RX ring and cost samples for every other consumer in the process, so
+ *    dropping is the correct failure and back-pressure is not.
+ *  - read() is called only by the consumer thread (in this app, the UI thread).
+ *  - open() / restart() / close() are control operations. They may run while
+ *    the DSP thread is producing — a drain handshake keeps the producer out of
+ *    the buffer while it is reallocated, and it is the CONTROL thread that
+ *    waits, never the DSP thread — but they must not run concurrently with
+ *    read(), because they free the buffer read() is copying out of. In practice
+ *    both live on the UI thread (an app opens the tap in on_show, drains it in
+ *    its frame handler, and closes it in on_hide), so that costs nothing.
+ *
+ * Loss is reported where it happened, not merely as a running total. When a
+ * write does not fit, the tap remembers the stream position of the seam and
+ * discards everything after it until the consumer has drained up to exactly
+ * that point. A returned block is therefore always internally contiguous — no
+ * read ever splices two moments together, which for a preamble detector would
+ * mean a fabricated preamble rather than a missed one — and the size of the
+ * hole immediately preceding it comes back with it, so a demodulator can reset
+ * its state exactly when the stream actually broke instead of resetting on
+ * every poll to be safe.
+ *
+ * The accounting is exact at every instant, for as long as the counters have
+ * been running:
+ *
+ *      offered() == delivered() + dropped() + available()
+ *
+ * reset_stats() zeroes the three counters without emptying the ring, so it
+ * breaks that identity by exactly whatever was buffered at the time and it
+ * stays broken. Call it on a drained tap if the invariant matters to you.
+ *
+ * Two things the counters deliberately do NOT track together. dropped() is the
+ * live truth and updates the moment a sample is discarded; the per-block
+ * lost_before is a PLACED figure and is only published by the write that
+ * follows the hole, so while a tear is still open dropped() runs ahead of the
+ * sum of everything announced. They converge on the next successful write. A
+ * consumer that wants the instantaneous total should read dropped() rather than
+ * accumulate lost_before, which lags by the tear in progress and, if the
+ * stream stops mid-tear, permanently omits that last episode.
+ */
+class RawSampleTap {
+   public:
+    /* How much air the ring holds, in seconds. Sizing in TIME rather than in
+     * samples is the whole point: a decoder needs to survive a slow UI frame,
+     * and a frame is a duration. 250 ms absorbs a ~15-frame stall at 60 Hz,
+     * which covers the hitches a desktop UI actually takes (a file dialog, a
+     * map tile decode, a window resize) without pretending to survive a hang. */
+    static constexpr double kDefaultHistorySeconds = 0.25;
+
+    /* Floor, so a low-rate device still has a usable window. */
+    static constexpr size_t kMinCapacitySamples = 1u << 16;  /* 512 KiB */
+
+    /* Ceiling, so an implausible rate cannot ask for a gigabyte. 8 Msamples of
+     * cfloat is 64 MiB; at the B200's 16 Msps USB-2 ceiling that is 500 ms, and
+     * at UHD's published 61.44 Msps it still holds 136 ms. */
+    static constexpr size_t kMaxCapacitySamples = 8u << 20;  /* 64 MiB */
+
+    /* What one read() returned. `lost_before` is the number of samples the tap
+     * discarded between the last sample of the previous block and the first
+     * sample of this one; the samples in this block are contiguous. */
+    struct Block {
+        size_t samples{0};
+        uint64_t lost_before{0};
+        bool contiguous() const { return lost_before == 0; }
+    };
+
+    /* Samples needed to hold `seconds` of `rate_hz`, clamped to the bounds
+     * above. */
+    static size_t capacity_for(double rate_hz, double seconds);
+
+    RawSampleTap() = default;
+    ~RawSampleTap();
+
+    RawSampleTap(const RawSampleTap&) = delete;
+    RawSampleTap& operator=(const RawSampleTap&) = delete;
+
+    /* --- Control (consumer's thread) --- */
+
+    /* Allocates the ring and starts accepting samples. Anything already
+     * buffered is discarded and reported to the consumer as a gap, because an
+     * open() is a new subscription and the old samples are not adjacent in time
+     * to the new ones. Returns false only for a zero capacity. */
+    bool open(size_t capacity_samples);
+
+    /* Re-sizes an open tap; a no-op if the tap is closed. Used when the sample
+     * rate changes, where keeping the sample count would silently shorten the
+     * window in time. Like open(), it restarts the stream. */
+    void restart(size_t capacity_samples);
+
+    /* Stops accepting samples and releases the ring. Whatever was buffered is
+     * counted as dropped — it went nowhere — but is NOT left queued as a gap
+     * for the next open() to announce: that would be a different subscription
+     * on a different stream, and it lost nothing. */
+    void close();
+
+    bool is_open() const { return enabled_.load(std::memory_order_acquire); }
+    size_t capacity() const { return capacity_.load(std::memory_order_acquire); }
+
+    /* Zeroes the lifetime counters. Does not touch buffered samples. */
+    void reset_stats();
+
+    /* --- Producer (DSP thread) --- */
+
+    /* Offers `count` samples. Accepts what fits and counts the rest as lost.
+     * Does nothing at all while the tap is closed, so the 29 apps that never
+     * open it pay two atomics per DSP block and no copy. */
+    void write(const dsp::cfloat* data, size_t count);
+
+    /* --- Consumer (its own thread) --- */
+
+    /* Replaces `out` with every sample buffered since the previous read, and
+     * reports the hole, if any, that precedes them. */
+    Block read(std::vector<dsp::cfloat>& out);
+
+    /* Samples buffered and not yet read.
+     *
+     * Exact on the consumer's thread. Safe from any other thread, including the
+     * producer's, but there it is only a snapshot: it can read low by whatever
+     * the producer has committed since, and it is clamped to capacity() so it
+     * can never read impossibly high. */
+    size_t available() const;
+
+    /* --- Counters --- */
+
+    uint64_t offered() const { return offered_.load(std::memory_order_relaxed); }
+    uint64_t delivered() const { return delivered_.load(std::memory_order_relaxed); }
+    uint64_t dropped() const { return dropped_.load(std::memory_order_relaxed); }
+
+    /* Number of times the ring filled up, i.e. distinct holes in the stream —
+     * as opposed to dropped(), which counts the samples lost in them. */
+    uint32_t overflows() const { return overflows_.load(std::memory_order_relaxed); }
+
+   private:
+    void produce(const dsp::cfloat* data, size_t count);
+
+    /* Disables the tap and waits for the DSP thread to leave write(), so the
+     * buffer can be reallocated under it. Only the caller waits. */
+    void drain_producer();
+
+    /* Throws away whatever is buffered and marks the discontinuity. Only valid
+     * with the producer drained. */
+    void restart_stream();
+
+    std::vector<dsp::cfloat> buffer_;
+    std::atomic<size_t> capacity_{0};
+
+    /* Absolute stream positions, never wrapped: the ring index is position %
+     * capacity. At 16 Msps a 64-bit counter wraps after 36 000 years. */
+    std::atomic<uint64_t> write_{0};
+    std::atomic<uint64_t> read_{0};
+
+    /* Torn: the producer overflowed at tear_pos_ and is discarding until the
+     * consumer has drained to exactly that position. This is what keeps a hole
+     * from ever landing in the middle of a returned block. */
+    std::atomic<bool> torn_{false};
+    std::atomic<uint64_t> tear_pos_{0};
+
+    /* Size of the hole that precedes the next samples the producer commits.
+     * Published by the producer before it writes them, consumed by the reader. */
+    std::atomic<uint64_t> gap_pending_{0};
+
+    /* Producer-private: samples lost in the tear now in progress. */
+    uint64_t episode_gap_{0};
+
+    std::atomic<uint64_t> offered_{0};
+    std::atomic<uint64_t> delivered_{0};
+    std::atomic<uint64_t> dropped_{0};
+    std::atomic<uint32_t> overflows_{0};
+
+    std::atomic<bool> enabled_{false};
+    std::atomic<bool> producer_in_{false};
+};
+
 class ReceiverModel {
    public:
     /* Matches ReceiverModel::Mode in the firmware. */
@@ -145,6 +337,25 @@ class ReceiverModel {
      * spectrum display. Returns false if none are ready yet. */
     bool take_spectrum_samples(std::vector<dsp::cfloat>& out, size_t count);
 
+    /* --- Gapless raw tap ---
+     * A second, additive tap on the same pre-channel-filter samples that feed
+     * take_spectrum_samples(). That one is a sliding snapshot and loses
+     * everything between polls; this one loses nothing while the consumer keeps
+     * up, and counts and locates what it loses when the consumer does not. See
+     * RawSampleTap above for the contract.
+     *
+     * It is off by default and costs nothing when off, because only decoders
+     * want it and copying every sample at 16 Msps is 128 MB/s.
+     *
+     * The ring is sized in time, from the rate the hardware actually gave us,
+     * so it is re-sized on start() — a rate change must move the sample count
+     * or a faster rate would silently shorten the window. */
+    bool enable_raw_tap(double history_seconds = RawSampleTap::kDefaultHistorySeconds);
+    void disable_raw_tap();
+    bool raw_tap_enabled() const { return raw_tap_.is_open(); }
+    RawSampleTap& raw_tap() { return raw_tap_; }
+    const RawSampleTap& raw_tap() const { return raw_tap_; }
+
     /* --- IQ capture ---
      * Writes the raw captured band to `<path>.C16` as interleaved int16 I/Q,
      * plus a Mayhem-compatible `<path>.TXT` holding center_frequency and
@@ -217,6 +428,17 @@ class ReceiverModel {
     std::mutex spectrum_mutex_;
     std::vector<dsp::cfloat> spectrum_buffer_;
     bool spectrum_ready_{false};
+
+    /* Gapless tap. Deliberately not sharing spectrum_buffer_: the two want
+     * opposite things from the same samples. The spectrum tap must keep the
+     * newest 4096 whatever the consumer does and must survive being read twice
+     * or not at all; the gapless tap must keep the OLDEST unread sample and is
+     * emptied by a read. Serving the old call from the new ring would make
+     * take_spectrum_samples() return nothing whenever a decoder had just
+     * drained it, which is a behaviour change in 29 apps that are out of scope
+     * here. Two buffers, one shared copy loop, no shared state. */
+    RawSampleTap raw_tap_;
+    double raw_tap_seconds_{RawSampleTap::kDefaultHistorySeconds};
 
     /* Capture sink. Opened and closed on the caller's thread, written only by
      * the DSP thread; capture_mutex_ covers the handover. */

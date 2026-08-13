@@ -17,6 +17,7 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io/fs"
 	"mime"
@@ -39,8 +40,17 @@ type Backend interface {
 	CurrentApp(ctx context.Context) (client.CurrentApp, error)
 	Launch(ctx context.Context, id string) (client.CurrentApp, error)
 	Home(ctx context.Context) (client.CurrentApp, error)
-	Panel(ctx context.Context) (client.Panel, error)
+	// Panel takes contract 4's image-cache token, passed through verbatim
+	// (empty = omit the parameter). See client.Client.Panel.
+	Panel(ctx context.Context, haveImageRev string) (client.Panel, error)
 	Status(ctx context.Context) (client.Status, error)
+	// Screen and Input are the framebuffer mirror, contracts 1 and 2; the
+	// live screen view is built on them (see screen.go). They are part of
+	// this interface rather than an optional one a Backend may or may not
+	// implement, so a backend that forgets them fails to compile instead of
+	// silently serving a portal with a dead screen.
+	Screen(ctx context.Context, after uint32, waitMS int) (client.ScreenFrame, bool, error)
+	Input(ctx context.Context, events []json.RawMessage) (client.InputResult, error)
 }
 
 var _ Backend = (*client.Client)(nil)
@@ -51,6 +61,7 @@ type Server struct {
 	backend Backend
 	assets  fs.FS
 	tiles   http.Handler
+	screen  *screenHub
 	mux     *http.ServeMux
 }
 
@@ -83,6 +94,7 @@ func New(backend Backend, opts ...Option) *Server {
 		backend: backend,
 		assets:  Assets(),
 		tiles:   tiles.NewDisabled("basemap tiles are not configured for this portal"),
+		screen:  newScreenHub(backend),
 	}
 	for _, opt := range opts {
 		opt(s)
@@ -104,6 +116,13 @@ func (s *Server) routes() {
 	mux.HandleFunc("POST /api/apps/home", s.handleHome)
 	mux.HandleFunc("GET /api/panel", s.handlePanel)
 	mux.HandleFunc("GET /api/status", s.handleStatus)
+
+	// The live screen: a WebSocket for browsers (contract 3) and the plain
+	// HTTP pair (contracts 1 and 2) proxied straight through for anything
+	// that can't hold a socket open. See screen.go.
+	mux.HandleFunc("GET /api/screen", s.handleScreen)
+	mux.HandleFunc("GET /api/screen/ws", s.handleScreenWS)
+	mux.HandleFunc("POST /api/input", s.handleInput)
 
 	// The basemap tile proxy is mounted unconditionally, even when tiles
 	// are disabled: a disabled proxy answers 503 JSON, whereas an absent
@@ -166,8 +185,13 @@ func (s *Server) handleHome(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, cur)
 }
 
+// handlePanel proxies GET /api/panel, forwarding contract 4's
+// have_image_rev cache token. The token is relayed exactly as the browser
+// sent it, never synthesized here: it says what the BROWSER already holds,
+// and the portal has no idea. Getting that wrong would make the backend omit
+// an image the browser has never seen.
 func (s *Server) handlePanel(w http.ResponseWriter, r *http.Request) {
-	p, err := s.backend.Panel(r.Context())
+	p, err := s.backend.Panel(r.Context(), r.URL.Query().Get("have_image_rev"))
 	if err != nil {
 		s.writeBackendError(w, err)
 		return

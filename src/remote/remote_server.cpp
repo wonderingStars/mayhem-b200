@@ -21,18 +21,25 @@
 #endif
 
 #include <cctype>
+#include <cerrno>
 #include <cstdlib>
 #include <sstream>
 #include <thread>
+#include <vector>
 
 namespace remote {
 
 namespace {
 
 constexpr const char* kJson = "application/json; charset=utf-8";
+constexpr const char* kOctetStream = "application/octet-stream";
 constexpr size_t kMaxHeaderBytes = 16 * 1024;
 constexpr size_t kMaxBodyBytes = 1 * 1024 * 1024;
 constexpr int kRecvTimeoutMs = 5000;
+/* Contract cap on GET /api/screen's ?wait_ms=. AppBridge::screen_frame()
+ * clamps to the same value; this one keeps a nonsense query from even being
+ * parsed into something larger. */
+constexpr unsigned long kMaxScreenWaitMs = 10000;
 
 /* --- Platform socket compatibility -------------------------------------------
  *
@@ -166,6 +173,7 @@ const char* status_text(int status) {
     switch (status) {
         case 200: return "OK";
         case 202: return "Accepted";
+        case 204: return "No Content";
         case 400: return "Bad Request";
         case 404: return "Not Found";
         case 405: return "Method Not Allowed";
@@ -176,6 +184,12 @@ const char* status_text(int status) {
 struct HttpRequest {
     std::string method;
     std::string path;
+    /* Everything after the '?', undecoded and without the '?' itself. Kept
+     * rather than discarded because /api/screen's long poll is entirely
+     * expressed in it: dropping the query string would silently turn every
+     * "?after=N&wait_ms=M" into a bare "give me the current frame", and the
+     * stream would spin instead of blocking with both sides' tests green. */
+    std::string query;
     std::string body;
 };
 
@@ -197,6 +211,23 @@ void send_response(socket_t s, int status, const char* content_type, const std::
     while (sent < text.size()) {
         const long n = socket_send(s, text.data() + static_cast<ptrdiff_t>(sent),
                                    text.size() - sent);
+        if (n <= 0) break;
+        sent += static_cast<size_t>(n);
+    }
+}
+
+/* 204 carries no body by definition (RFC 7230 section 3.3.3), so it gets no
+ * Content-Length either — send_response() would emit "Content-Length: 0",
+ * which browsers tolerate but which is not what a 204 means. */
+void send_no_content(socket_t s) {
+    static const std::string text =
+        "HTTP/1.1 204 No Content\r\n"
+        "Access-Control-Allow-Origin: *\r\n"
+        "Connection: close\r\n"
+        "\r\n";
+    size_t sent = 0;
+    while (sent < text.size()) {
+        const long n = socket_send(s, text.data() + static_cast<ptrdiff_t>(sent), text.size() - sent);
         if (n <= 0) break;
         sent += static_cast<size_t>(n);
     }
@@ -239,7 +270,10 @@ bool read_request(socket_t s, HttpRequest& out) {
     if (out.method.empty() || out.path.empty()) return false;
 
     const auto query = out.path.find('?');
-    if (query != std::string::npos) out.path = out.path.substr(0, query);
+    if (query != std::string::npos) {
+        out.query = out.path.substr(query + 1);
+        out.path = out.path.substr(0, query);
+    }
 
     size_t content_length = 0;
     std::string line;
@@ -268,6 +302,42 @@ bool read_request(socket_t s, HttpRequest& out) {
     if (out.body.size() > content_length) out.body.resize(content_length);
 
     return true;
+}
+
+/* Value of `name` in an "a=1&b=2" query string, or an empty string when it is
+ * absent or has no value. No percent-decoding: the only parameters this server
+ * reads are decimal integers, and a caller that percent-encodes a digit gets
+ * the same answer as one that sends garbage — the default. */
+std::string query_param(const std::string& query, const std::string& name) {
+    size_t pos = 0;
+    while (pos < query.size()) {
+        size_t amp = query.find('&', pos);
+        if (amp == std::string::npos) amp = query.size();
+
+        const size_t eq = query.find('=', pos);
+        if (eq != std::string::npos && eq < amp && query.compare(pos, eq - pos, name) == 0)
+            return query.substr(eq + 1, amp - eq - 1);
+
+        pos = amp + 1;
+    }
+    return {};
+}
+
+/* Decimal parse with a caller-supplied default for "absent", "not a number"
+ * and "out of range" alike — a malformed ?after= is not worth a 400 when the
+ * honest fallback (start from the beginning / do not wait) is well defined. */
+unsigned long query_param_ulong(const std::string& query, const std::string& name,
+                                unsigned long fallback, unsigned long max_value) {
+    const std::string raw = query_param(query, name);
+    if (raw.empty()) return fallback;
+    for (char c : raw)
+        if (std::isdigit(static_cast<unsigned char>(c)) == 0) return fallback;
+
+    errno = 0;
+    char* end = nullptr;
+    const unsigned long v = std::strtoul(raw.c_str(), &end, 10);
+    if (end == raw.c_str() || errno == ERANGE || v > max_value) return fallback;
+    return v;
 }
 
 bool starts_with(const std::string& s, const std::string& prefix) {
@@ -299,9 +369,68 @@ void route(socket_t client, const HttpRequest& req) {
     } else if (req.method == "GET" && req.path == "/api/apps/current") {
         send_response(client, 200, kJson, bridge.current_app_json());
     } else if (req.method == "GET" && req.path == "/api/panel") {
-        send_response(client, 200, kJson, bridge.panel_json());
+        /* ?have_image_rev=N is the client telling us which image rev it is
+         * already showing, so an unchanged picture costs a few hundred bytes
+         * instead of re-sending its base64 every poll. Absent or malformed
+         * means "the client has nothing" — the same answer as before this
+         * parameter existed, which is what makes ignoring it safe rather than
+         * merely tolerable. */
+        const uint32_t have_image_rev = static_cast<uint32_t>(
+            query_param_ulong(req.query, "have_image_rev", 0, 0xFFFFFFFFul));
+        send_response(client, 200, kJson, bridge.panel_json(have_image_rev));
     } else if (req.method == "GET" && req.path == "/api/status") {
         send_response(client, 200, kJson, bridge.status_json());
+    } else if (req.method == "GET" && req.path == "/api/screen") {
+        /* Blocking is deliberate and safe here: every connection already has
+         * its own thread (see accept_loop()), and screen_frame() parks on its
+         * own condition variable holding nothing another handler needs.
+         * RemoteServer::stop() releases anyone still waiting. */
+        const uint32_t after = static_cast<uint32_t>(
+            query_param_ulong(req.query, "after", 0, 0xFFFFFFFFul));
+        /* Parsed wide, then CLAMPED — not rejected. "cap 10000" means an
+         * over-long wait is shortened to the cap; treating it as malformed and
+         * falling back to 0 would turn a client asking to block for a minute
+         * into a client polling flat out, which is the opposite of what it
+         * asked for. (Found by driving a live --portal with wait_ms=60000: it
+         * answered 204 in 4 ms.) */
+        const unsigned long requested_wait =
+            query_param_ulong(req.query, "wait_ms", 0, 0xFFFFFFFFul);
+        const int wait_ms = static_cast<int>(
+            requested_wait > kMaxScreenWaitMs ? kMaxScreenWaitMs : requested_wait);
+
+        std::string frame;
+        if (bridge.screen_frame(after, wait_ms, frame))
+            send_response(client, 200, kOctetStream, frame);
+        else
+            send_no_content(client); /* nothing captured yet, or the wait expired */
+    } else if (req.method == "POST" && req.path == "/api/input") {
+        std::vector<RemoteInput> events;
+        size_t dropped = 0;
+        if (!parse_input_events(req.body, events, dropped)) {
+            send_json_error(client, 400, "expected {\"events\":[...]}");
+        } else {
+            /* 200 rather than the 202 the launch routes use: those promise an
+             * action for a later frame, this reports a count that is already
+             * final. Events an older or newer client sent that this build does
+             * not understand are in `dropped`, not an error — see
+             * parse_input_events(). */
+            bridge.queue_input(events);
+
+            /* `dropped` is about THIS request's events and nothing else. The
+             * queue evicts oldest-first, so a full queue discards events from
+             * earlier requests that were already, truthfully, reported as
+             * queued — folding those in here would tell a client that the
+             * five keys it just sent were refused when all five were taken.
+             * A request longer than the whole queue is the one case where it
+             * really does lose events of its own, and those are counted. */
+            const size_t self_evicted = events.size() > AppBridge::kMaxQueuedInputs
+                                            ? events.size() - AppBridge::kMaxQueuedInputs
+                                            : 0;
+            JsonValue v = JsonValue::object();
+            v.set("queued", JsonValue::number(static_cast<double>(events.size() - self_evicted)));
+            v.set("dropped", JsonValue::number(static_cast<double>(dropped + self_evicted)));
+            send_response(client, 200, kJson, v.dump());
+        }
     } else if (req.method == "POST" && req.path == "/api/apps/home") {
         bridge.request_home();
         send_response(client, 202, kJson, R"({"queued":true})");
@@ -403,6 +532,12 @@ bool RemoteServer::start(uint16_t port) {
 
 void RemoteServer::stop() {
     if (!running_.exchange(false)) return;
+
+    /* Detached /api/screen handlers may each be parked for up to 10 s. stop()
+     * does not join them, but leaving them parked delays process exit and
+     * leaves clients hanging on a server that is gone — so release them first,
+     * with a 204, which is exactly what they would send on a timeout anyway. */
+    AppBridge::instance().cancel_screen_waits();
 
     if (listen_socket_ != kInvalidSocket) {
         /* Unblocks the accept() call in accept_loop(). */

@@ -189,6 +189,8 @@ const char* panel_kind_name(PanelKind k) {
         case PanelKind::Adsb: return "adsb";
         case PanelKind::Form: return "form";
         case PanelKind::Screen: return "screen";
+        case PanelKind::Image: return "image";
+        case PanelKind::GeoTable: return "geotable";
     }
     return "screen";
 }
@@ -249,7 +251,9 @@ JsonValue to_json(const MapData& m) {
         jm.set("lat", JsonValue::number(mk.lat));
         jm.set("lon", JsonValue::number(mk.lon));
         jm.set("label", JsonValue::string(mk.label));
-        jm.set("heading_deg", JsonValue::number(mk.heading_deg));
+        /* Omitted, not zeroed, when the source had no heading. */
+        if (mk.heading_deg.has_value())
+            jm.set("heading_deg", JsonValue::number(*mk.heading_deg));
         markers.push_back(std::move(jm));
     }
     v.set("markers", std::move(markers));
@@ -318,13 +322,61 @@ JsonValue to_json(const FormData& f) {
     return v;
 }
 
+JsonValue to_json(const ImageData& i, uint32_t have_rev) {
+    JsonValue v = JsonValue::object();
+    if (!i.app_name.empty()) v.set("app_name", JsonValue::string(i.app_name));
+    v.set("width", JsonValue::integer(i.width));
+    v.set("height", JsonValue::integer(i.height));
+    /* The only format there is. Named on the wire anyway so a future 16-bit
+     * or palettised payload cannot be mistaken for this one. */
+    v.set("format", JsonValue::string("rgb888"));
+    v.set("rev", JsonValue::integer(i.rev));
+
+    /* Three separate reasons to send no pixels, all of them legitimate:
+     * nothing decoded yet (rgb empty, rev 0), the client already holds this
+     * rev, or — defensively — a payload whose length disagrees with the stated
+     * geometry, which the browser would render as diagonal garbage. */
+    const size_t expected =
+        static_cast<size_t>(i.width) * static_cast<size_t>(i.height) * 3u;
+    if (!i.rgb.empty() && i.rgb.size() == expected && i.rev != have_rev)
+        v.set("data_b64", JsonValue::string(base64_encode(i.rgb.data(), i.rgb.size())));
+
+    if (!i.note.empty()) v.set("note", JsonValue::string(i.note));
+    return v;
+}
+
+JsonValue to_json(const GeoTableData& g) {
+    JsonValue v = JsonValue::object();
+    if (!g.app_name.empty()) v.set("app_name", JsonValue::string(g.app_name));
+
+    /* Byte-for-byte the flat table shape a `table` panel emits, so an app can
+     * be upgraded from one kind to the other without a single cell moving. */
+    v.set("table", to_json(g.table));
+
+    JsonValue markers = JsonValue::array();
+    for (const auto& mk : g.markers) {
+        JsonValue jm = JsonValue::object();
+        jm.set("lat", JsonValue::number(mk.lat));
+        jm.set("lon", JsonValue::number(mk.lon));
+        jm.set("label", JsonValue::string(mk.label));
+        if (mk.heading_deg.has_value())
+            jm.set("heading_deg", JsonValue::number(*mk.heading_deg));
+        if (!mk.kind.empty()) jm.set("kind", JsonValue::string(mk.kind));
+        markers.push_back(std::move(jm));
+    }
+    JsonValue map = JsonValue::object();
+    map.set("markers", std::move(markers));
+    v.set("map", std::move(map));
+    return v;
+}
+
 JsonValue to_json(const ScreenData& s) {
     JsonValue v = JsonValue::object();
     v.set("message", JsonValue::string(s.message));
     return v;
 }
 
-JsonValue panel_payload(const PanelData& p) {
+JsonValue panel_payload(const PanelData& p, uint32_t have_image_rev) {
     switch (p.kind) {
         case PanelKind::Table: return to_json(p.table);
         case PanelKind::Spectrum: return to_json(p.spectrum);
@@ -334,6 +386,8 @@ JsonValue panel_payload(const PanelData& p) {
         case PanelKind::Adsb: return to_json(p.adsb);
         case PanelKind::Form: return to_json(p.form);
         case PanelKind::Screen: return to_json(p.screen);
+        case PanelKind::Image: return to_json(p.image, have_image_rev);
+        case PanelKind::GeoTable: return to_json(p.geotable);
     }
     return JsonValue::object();
 }
@@ -343,6 +397,90 @@ JsonValue to_json(const PanelData& p) {
     v.set("kind", JsonValue::string(panel_kind_name(p.kind)));
     v.set(panel_kind_name(p.kind), panel_payload(p));
     return v;
+}
+
+/* --- Pixel and payload helpers ------------------------------------------- */
+
+std::string base64_encode(const uint8_t* data, size_t count) {
+    static const char kAlphabet[] =
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+    std::string out;
+    if (data == nullptr || count == 0) return out;
+    out.reserve(((count + 2) / 3) * 4);
+
+    size_t i = 0;
+    for (; i + 3 <= count; i += 3) {
+        const uint32_t v = (static_cast<uint32_t>(data[i]) << 16) |
+                           (static_cast<uint32_t>(data[i + 1]) << 8) |
+                           static_cast<uint32_t>(data[i + 2]);
+        out.push_back(kAlphabet[(v >> 18) & 0x3F]);
+        out.push_back(kAlphabet[(v >> 12) & 0x3F]);
+        out.push_back(kAlphabet[(v >> 6) & 0x3F]);
+        out.push_back(kAlphabet[v & 0x3F]);
+    }
+
+    const size_t rest = count - i;
+    if (rest == 1) {
+        const uint32_t v = static_cast<uint32_t>(data[i]) << 16;
+        out.push_back(kAlphabet[(v >> 18) & 0x3F]);
+        out.push_back(kAlphabet[(v >> 12) & 0x3F]);
+        out += "==";
+    } else if (rest == 2) {
+        const uint32_t v = (static_cast<uint32_t>(data[i]) << 16) |
+                           (static_cast<uint32_t>(data[i + 1]) << 8);
+        out.push_back(kAlphabet[(v >> 18) & 0x3F]);
+        out.push_back(kAlphabet[(v >> 12) & 0x3F]);
+        out.push_back(kAlphabet[(v >> 6) & 0x3F]);
+        out.push_back('=');
+    }
+    return out;
+}
+
+bool rgb565_is_blank(const uint16_t* pixels, size_t count) {
+    if (pixels == nullptr) return true;
+    for (size_t i = 0; i < count; i++) {
+        if (pixels[i] != 0) return false;
+    }
+    return true;
+}
+
+uint64_t rgb565_content_hash(const uint16_t* pixels, size_t count) {
+    /* FNV-1a, 64-bit. Fed the two bytes of each pixel separately so the hash
+     * of a buffer does not depend on this host's endianness. */
+    uint64_t h = 1469598103934665603ULL;
+    if (pixels == nullptr) return h;
+    for (size_t i = 0; i < count; i++) {
+        const uint16_t v = pixels[i];
+        h = (h ^ static_cast<uint8_t>(v & 0xFF)) * 1099511628211ULL;
+        h = (h ^ static_cast<uint8_t>((v >> 8) & 0xFF)) * 1099511628211ULL;
+    }
+    return h;
+}
+
+void rgb565_to_rgb888(const uint16_t* pixels, size_t count, std::vector<uint8_t>& out) {
+    out.clear();
+    if (pixels == nullptr || count == 0) return;
+    out.resize(count * 3);
+
+    for (size_t i = 0; i < count; i++) {
+        const uint16_t v = pixels[i];
+        const uint32_t r5 = (v >> 11) & 0x1F;
+        const uint32_t g6 = (v >> 5) & 0x3F;
+        const uint32_t b5 = v & 0x1F;
+        out[i * 3 + 0] = static_cast<uint8_t>((r5 << 3) | (r5 >> 2));
+        out[i * 3 + 1] = static_cast<uint8_t>((g6 << 2) | (g6 >> 4));
+        out[i * 3 + 2] = static_cast<uint8_t>((b5 << 3) | (b5 >> 2));
+    }
+}
+
+uint32_t ImageRevCounter::observe(uint64_t content_hash) {
+    if (!seeded_ || content_hash != last_hash_) {
+        last_hash_ = content_hash;
+        seeded_ = true;
+        rev_++;
+    }
+    return rev_;
 }
 
 }  // namespace remote

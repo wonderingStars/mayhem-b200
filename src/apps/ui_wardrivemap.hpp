@@ -115,6 +115,12 @@ class WardriveMapView : public ui::View {
     void set_observations(std::vector<wardrive::Observation> observations);
     size_t observation_count() const { return observations_.size(); }
 
+    /* Read-only view of the geotagged observations, for
+     * src/remote/provider_wardrive.cpp to publish to the web portal. Const by
+     * design: the portal only ever reads. Same idiom as
+     * AprsTableView::entries() (ui_aprs_rx.hpp). */
+    const std::vector<wardrive::Observation>& observations() const { return observations_; }
+
    private:
     /* Reads the CSV log and the capture-metadata .TXT files into observations_,
      * keeping only geotagged entries (upstream's filter). */

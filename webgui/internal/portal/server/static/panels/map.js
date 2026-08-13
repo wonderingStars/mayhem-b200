@@ -4,8 +4,14 @@
 //
 // The "map" panel: markers with lat/lon/label/heading on a pannable/
 // zoomable offline canvas map with a lat/lon graticule -- no tile service,
-// so it works with no network access at all. Used by ADS-B/APRS today; the
-// shape is generic to "things with a position" (see ../../../PANELS.md).
+// so it works with no network access at all. The shape is generic to "things
+// with a position" (see ../../../PANELS.md).
+//
+// Two hosts reach this renderer: WardriveMap, the only backend that publishes
+// the `map` kind directly, and the `geotable` panel, which mounts this as its
+// upper half for AIS and APRS. Both hand over the contract's marker shape and
+// normalizeMarkers() reconciles it with the one drawn here -- see the comment
+// there, and do not add a second copy of that adaptation in a caller.
 //
 // Projection is a simple equirectangular one with a latitude-cosine x
 // correction (accurate enough at the local scales these apps operate at;
@@ -385,12 +391,58 @@
     });
   }
 
+  // normalizeMarkers reconciles the panel contract's marker shape with the
+  // one this renderer draws. It is applied to every marker array that reaches
+  // this panel, so a backend cannot arrive with the contract's spelling and
+  // silently lose half its data.
+  //
+  //   - heading_deg -> heading. The contract names the field for its unit
+  //     (as the adsb panel does); this file has called it `heading` since
+  //     before that contract existed, and read only its own spelling -- so a
+  //     marker that said which way it was pointing was drawn as a plain dot.
+  //     A marker with no heading in either spelling keeps none: the dot IS
+  //     the honest rendering of "we do not know". Never defaulted to 0, which
+  //     reads as "due north".
+  //   - id. Marker selection (click -> tooltip) is keyed on `id`; the
+  //     contract has no such field. Leaving it undefined made every marker
+  //     compare equal to every other, so one click highlighted all of them
+  //     and the tooltip printed the FIRST marker's name and position -- a
+  //     real value belonging to a different entity, which is worse than no
+  //     tooltip at all. The label is the entry's own identity in every app
+  //     that publishes a position (MMSI, callsign, SSID); index is the
+  //     fallback for a marker with no label. This is a rendering key and is
+  //     never displayed as data: the tooltip prints `label || id`, and a
+  //     marker with no label has nothing else to print anyway.
+  //
+  // Markers without a usable position are dropped here rather than skipped at
+  // every draw site, so the marker count says how many are actually on the
+  // map.
+  function normalizeMarkers(raw) {
+    const out = [];
+    (Array.isArray(raw) ? raw : []).forEach((m, i) => {
+      if (!m || !Number.isFinite(m.lat) || !Number.isFinite(m.lon)) return;
+      const adapted = {
+        id: m.id !== undefined ? m.id : (m.label ? "l:" + m.label : "i:" + i),
+        lat: m.lat,
+        lon: m.lon,
+        label: m.label,
+        kind: m.kind,
+      };
+      const heading = Number.isFinite(m.heading) ? m.heading
+        : (Number.isFinite(m.heading_deg) ? m.heading_deg : null);
+      if (heading !== null) adapted.heading = heading;
+      if (m.detail !== undefined) adapted.detail = m.detail;
+      out.push(adapted);
+    });
+    return out;
+  }
+
   function render(el, data) {
     data = data || {};
     const st = el.__mpMap || buildSkeleton(el);
 
     st.titleEl.textContent = data.app_name || "Map";
-    st.markers = data.markers || [];
+    st.markers = normalizeMarkers(data.markers);
     st.countEl.textContent = `${st.markers.length} ${st.markers.length === 1 ? "marker" : "markers"}`;
     updateLegend(st);
 

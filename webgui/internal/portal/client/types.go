@@ -7,8 +7,9 @@
 // That API is a thin JSON window onto the same state the 240x320 framebuffer
 // UI draws from — app::AppRegistry, ui::NavigationView and each app's own
 // panel data — so a browser can render it properly instead of just mirroring
-// pixels. See ../../../doc/REMOTE-UI.md for the (separate) framebuffer/
-// WebSocket mirror protocol this complements.
+// pixels. The screen mirror this package also speaks (screen.go) is the
+// other half of the same API — see ../../../doc/REMOTE-UI.md, which now
+// documents both hops as built.
 //
 // Wire contract assumed by this client (the C++ side is built by another
 // agent against this same contract):
@@ -17,8 +18,10 @@
 //	GET  /api/apps/current    -> CurrentApp
 //	POST /api/apps/{id}/launch -> CurrentApp
 //	POST /api/apps/home       -> CurrentApp
-//	GET  /api/panel           -> Panel
+//	GET  /api/panel           -> Panel        (?have_image_rev=N, contract 4)
 //	GET  /api/status          -> Status
+//	GET  /api/screen          -> binary frame (contract 1, see screen.go)
+//	POST /api/input           -> InputResult  (contract 2, see screen.go)
 //
 // Every struct here only reads fields it knows about via encoding/json, so
 // the backend is free to add fields later without breaking this client.
@@ -27,8 +30,7 @@ package client
 import "encoding/json"
 
 // App is one entry from app::AppRegistry, as published over the API.
-// Field names mirror app::AppEntry (app_registry.hpp) and the "apps"
-// WebSocket message in doc/REMOTE-UI.md.
+// Field names mirror app::AppEntry (app_registry.hpp).
 type App struct {
 	ID              string `json:"id"`
 	DisplayName     string `json:"display_name"`
@@ -47,10 +49,25 @@ type AppsResponse struct {
 
 // CurrentApp describes what ui::NavigationView currently has on top of its
 // stack: either a running app or the home menu (ID == "" means home).
-// Mirrors REMOTE-UI's "view" message plus the launched app's id.
+// The C++ side derives this from the navigation stack on every refresh, so
+// it follows the device even when the operator navigated with the keys
+// rather than through the launch route.
 type CurrentApp struct {
-	ID        string `json:"id,omitempty"`
-	Title     string `json:"title"`
+	ID    string `json:"id,omitempty"`
+	Title string `json:"title"`
+	// PanelKind is the panel kind the active app publishes, as
+	// AppBridge::current_app_json() sends it (app_bridge.cpp). This struct is
+	// what the portal server re-encodes for the browser, so a field missing
+	// here is a field the browser can never see, however faithfully the C++
+	// side sends it — and this one WAS missing: testdata/cpp_current.json,
+	// captured from a real backend, reads
+	// {"id":"adsbrx",...,"panel_kind":"adsb",...} and the browser got no
+	// panel_kind at all.
+	//
+	// Note this is only ever the ONE app that is open. GET /api/apps carries
+	// no panel kind per app (see to_json(AppSummary) in app_data.cpp), which
+	// is why the grid cannot draw a truthful NATIVE badge yet.
+	PanelKind string `json:"panel_kind,omitempty"`
 	CanGoBack bool   `json:"can_go_back"`
 }
 
@@ -77,8 +94,8 @@ type Panel struct {
 // HasData reports whether the backend published anything to draw.
 func (p Panel) HasData() bool { return p.PanelKind != "" }
 
-// Status is the payload of GET /api/status: the header-bar state. Mirrors
-// REMOTE-UI's "status" message plus a version string for display.
+// Status is the payload of GET /api/status: the header-bar state, plus a
+// version string for display.
 type Status struct {
 	// Device is a human-readable device label (e.g. "B200 EDR04ZDB2"), or
 	// empty if no radio is attached/opened.

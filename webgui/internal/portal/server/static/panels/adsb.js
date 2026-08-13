@@ -89,7 +89,7 @@
 .mp-adsb-ctl .mp-adsb-btn { width: 30px; height: 28px; padding: 0; text-align: center; }
 .mp-adsb-ctl .mp-adsb-btn.mp-adsb-wide { width: auto; padding: 0 8px; }
 .mp-adsb-scale { position: absolute; left: 8px; bottom: 8px; font: 11px var(--mp-mono, monospace);
-  color: var(--mp-text-faint, #5b6b80); background: rgba(10,14,20,0.7); padding: 2px 6px; border-radius: 4px; }
+  color: var(--mp-text-dim, #a09681); background: rgba(10,14,20,0.7); padding: 2px 6px; border-radius: 4px; }
 .mp-adsb-tip { position: absolute; pointer-events: none; z-index: 3; max-width: 240px;
   background: rgba(10,14,20,0.95); border: 1px solid var(--mp-border, #232d3b);
   border-radius: 6px; padding: 6px 8px; font: 11px var(--mp-mono, monospace);
@@ -97,7 +97,7 @@
 .mp-adsb-tip b { color: var(--mp-accent, #34d8c3); }
 .mp-adsb-legend { position: absolute; left: 8px; top: 8px; display: flex; align-items: center; gap: 6px;
   background: rgba(10,14,20,0.7); padding: 3px 6px; border-radius: 4px;
-  font: 10px var(--mp-mono, monospace); color: var(--mp-text-faint, #5b6b80); }
+  font: 10px var(--mp-mono, monospace); color: var(--mp-text-dim, #a09681); }
 .mp-adsb-ramp { width: 108px; height: 8px; border-radius: 2px; }
 /* Attribution sits above every other map overlay (the tooltip included) on
    purpose: the OSM tile usage policy requires it to be visible whenever the
@@ -114,7 +114,7 @@
 .mp-adsb-attrib a:hover { text-decoration: underline; }
 .mp-adsb-offline { position: absolute; right: 6px; bottom: 5px; z-index: 4;
   background: rgba(10,14,20,0.78); padding: 2px 6px; border-radius: 4px;
-  font: 10px var(--mp-sans, sans-serif); color: var(--mp-text-faint, #5b6b80); }
+  font: 10px var(--mp-sans, sans-serif); color: var(--mp-text-dim, #a09681); }
 
 .mp-adsb-tablewrap { min-height: 0; overflow: auto; border: 1px solid var(--mp-border, #232d3b);
   border-radius: var(--mp-radius, 8px); background: var(--mp-panel, #121821); }
@@ -135,12 +135,12 @@ table.mp-adsb-table tbody tr.mp-adsb-sel { background: rgba(52,216,195,0.16); }
 table.mp-adsb-table tbody tr.mp-adsb-new td { animation: mp-adsb-flash 6s ease-out 1; }
 @keyframes mp-adsb-flash { from { background: rgba(61,220,132,0.42); } to { background: transparent; } }
 table.mp-adsb-table td.mp-adsb-flight { color: var(--mp-accent, #34d8c3); }
-table.mp-adsb-table tr.mp-adsb-stale td { color: var(--mp-text-faint, #5b6b80); }
+table.mp-adsb-table tr.mp-adsb-stale td { color: var(--mp-text-dim, #a09681); }
 table.mp-adsb-table td.mp-adsb-sq-alert { color: var(--mp-danger, #ef5464); font-weight: 700; }
 .mp-adsb-swatch { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 5px;
   vertical-align: baseline; }
 .mp-adsb-empty { padding: 14px; text-align: center; font: 12px var(--mp-sans, sans-serif);
-  color: var(--mp-text-faint, #5b6b80); }
+  color: var(--mp-text-dim, #a09681); }
 `;
 
   function ensureStyle() {
@@ -886,7 +886,14 @@ table.mp-adsb-table td.mp-adsb-sq-alert { color: var(--mp-danger, #ef5464); font
     const v = rangeStep(pxPerUnit, 60);
     st.scaleEl.textContent = rangeLabel(v, st.units.metric);
     st.scaleEl.style.width = `${Math.round(v * pxPerUnit)}px`;
-    st.scaleEl.style.borderBottom = "2px solid var(--mp-text-faint, #5b6b80)";
+    // currentColor, not a named token: an inline style beats every stylesheet,
+    // so naming a colour here put the ruler permanently out of the theme's
+    // reach. It used to be --mp-text-faint, which measures 2.2:1 against this
+    // overlay's own box over a pale tile -- under the 3:1 WCAG 1.4.11 asks of
+    // a graphical object, and unfixable from panels.css even after that sheet
+    // had correctly moved the scale's *text* up to --mp-text-dim. Following
+    // the element's own colour keeps the bar and its label in step for good.
+    st.scaleEl.style.borderBottom = "2px solid currentColor";
   }
 
   // Above this zoom the view is a few tens of km across and every target can

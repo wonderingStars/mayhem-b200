@@ -85,8 +85,8 @@ const (
 	// requires: a name that can be traced back to the software, plus a
 	// contact URL. Do not replace this with a library default.
 	//
-	// The version here is the remote-UI/portal protocol version this webgui
-	// speaks (doc/REMOTE-UI.md), NOT the CMake project version — it is only
+	// The version here identifies this webgui build to a tile server, NOT
+	// the CMake project version and NOT the portal protocol version — it is only
 	// ever read by a human looking at a tile server's logs, so what matters
 	// is that it identifies a build, and that it is changed deliberately
 	// rather than drifting. README.md and internal/portal/PANELS.md quote it

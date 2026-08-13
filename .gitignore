@@ -1,4 +1,8 @@
 build/
+# Out-of-tree build dirs (build-verify/ etc.) used to check a change against a
+# clean configure. Artefacts only -- and one of them holds a copied uhd.dll,
+# which is GPLv3 and must never be committed to a source tree we publish.
+build*/
 out/
 .vs/
 .idea/

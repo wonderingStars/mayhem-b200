@@ -20,6 +20,14 @@
  * read without editing the app; a console panel for it would need that
  * accessor to exist first.
  *
+ * THE PANEL IS A GEOTABLE, NOT A PLAIN TABLE. The table half is byte-for-byte
+ * what this file published before — same four columns, same cells, same order —
+ * and the markers are a strict addition beside it. A station earns a marker
+ * ONLY when AprsRecentEntry::has_position is set, which is the same flag the
+ * table's own "Loc" column shows a '*' for. A station heard only through a
+ * status or telemetry packet is in the table and NOT on the map; it is
+ * emphatically not at 0N 0E.
+ *
  * THREADING: a provider is only ever called from AppBridge::refresh(), i.e.
  * on the UI thread, so walking the view tree and reading the entries list here
  * races nothing — see app_bridge.hpp's file header.
@@ -116,6 +124,36 @@ TableData aprs_table_data(const app::AprsRecentEntries& entries) {
     return table_data_from_entries(aprs_columns(), entries, aprs_row);
 }
 
+/* The map half. Exposed for the same reason as aprs_table_data(): the rule
+ * about which stations do and do not get a marker is the part worth asserting.
+ *
+ * No conversion happens here. AprsPosition already holds decimal degrees the
+ * app's own AX.25 position decode produced, and there is no heading field on an
+ * APRS entry at all — a course in a position report is not parsed into the
+ * entry — so heading_deg is absent rather than zero. */
+std::vector<GeoTableMarker> aprs_geo_markers(const app::AprsRecentEntries& entries,
+                                             size_t max_markers) {
+    std::vector<GeoTableMarker> markers;
+    size_t n = 0;
+    for (const auto& e : entries) {
+        if (n >= max_markers) break;
+        n++;
+
+        /* The app's own flag, the same one the Loc column reads. */
+        if (!e.has_position) continue;
+
+        GeoTableMarker mk;
+        mk.lat = static_cast<double>(e.pos.latitude);
+        mk.lon = static_cast<double>(e.pos.longitude);
+        /* The table's Source cell, so a marker and its row name the same
+         * station. */
+        mk.label = e.source_formatted;
+        mk.kind = "station";
+        markers.push_back(std::move(mk));
+    }
+    return markers;
+}
+
 namespace {
 
 PanelData aprs_panel(ui::View& view) {
@@ -135,8 +173,11 @@ PanelData aprs_panel(ui::View& view) {
         return panel;
     }
 
-    panel.kind = PanelKind::Table;
-    panel.table = aprs_table_data(table_view->entries());
+    panel.kind = PanelKind::GeoTable;
+    panel.geotable.table = aprs_table_data(table_view->entries());
+    /* The same 200-row ceiling table_data_from_entries() applies, so a marker
+     * can never refer to a row the table does not carry. */
+    panel.geotable.markers = aprs_geo_markers(table_view->entries(), 200);
     return panel;
 }
 

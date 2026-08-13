@@ -36,9 +36,20 @@ func (stubBackend) CurrentApp(context.Context) (client.CurrentApp, error) {
 func (stubBackend) Launch(context.Context, string) (client.CurrentApp, error) {
 	return client.CurrentApp{}, nil
 }
-func (stubBackend) Home(context.Context) (client.CurrentApp, error) { return client.CurrentApp{}, nil }
-func (stubBackend) Panel(context.Context) (client.Panel, error)     { return client.Panel{}, nil }
-func (stubBackend) Status(context.Context) (client.Status, error)   { return client.Status{}, nil }
+func (stubBackend) Home(context.Context) (client.CurrentApp, error)     { return client.CurrentApp{}, nil }
+func (stubBackend) Panel(context.Context, string) (client.Panel, error) { return client.Panel{}, nil }
+func (stubBackend) Status(context.Context) (client.Status, error)       { return client.Status{}, nil }
+
+// The framebuffer mirror (server.Backend's Screen/Input, contracts 1 and 2)
+// is not exercised by the tile route tests: this stub answers "no frame yet"
+// and accepts no input, which is exactly what a backend with nothing drawn
+// does.
+func (stubBackend) Screen(context.Context, uint32, int) (client.ScreenFrame, bool, error) {
+	return client.ScreenFrame{}, false, nil
+}
+func (stubBackend) Input(context.Context, []json.RawMessage) (client.InputResult, error) {
+	return client.InputResult{}, nil
+}
 
 // stubTransport answers every upstream request with the same tile.
 type stubTransport struct {

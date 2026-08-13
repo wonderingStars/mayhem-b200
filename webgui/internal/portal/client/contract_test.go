@@ -150,6 +150,14 @@ func TestContract_CurrentAppDecodesRealBackendOutput(t *testing.T) {
 	if !cur.CanGoBack {
 		t.Error("CanGoBack is false with an app open — the back control would be dead")
 	}
+	// The backend has always sent panel_kind here; this struct had no field
+	// for it, so the portal server re-encoded the response without it and the
+	// browser never saw it. A dropped field looks exactly like a field the
+	// backend does not send, which is how it went unnoticed.
+	if cur.PanelKind != "adsb" {
+		t.Errorf("PanelKind = %q, want %q — the fixture carries it and this "+
+			"struct is what gets re-encoded for the browser", cur.PanelKind, "adsb")
+	}
 }
 
 func TestContract_StatusDecodesRealBackendOutput(t *testing.T) {
