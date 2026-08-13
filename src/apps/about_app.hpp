@@ -57,8 +57,16 @@ namespace app {
  * the TX plumbing works. set_rx_rate keeps caps().master_clock_rate honest on
  * every call. Test-suite hardening: no fixture collides across concurrent
  * processes, no detached thread can dangle a stack frame, and scheduling
- * assumptions under load became guarantees. */
-constexpr const char* kVersion = "0.11.4";
+ * assumptions under load became guarantees.
+ * 0.12.0: the capability round. GET /api/apps carries panel_kind so the grid
+ * badges apps with native views; analog RX bandwidth follows the chosen rate
+ * and gain is validated against the attached radio's caps (capability_policy,
+ * beside rate_policy); FPV Detect's retune storm and frozen level are fixed
+ * (first reading now ~1 s, was 10-15 s); the sdrlink reconnect replays gain
+ * in dB rather than Hz; and the USRP RX thread survives the app-switch race
+ * (start-command retry across streamer generations, plus a starvation
+ * watchdog that re-kicks a stream the hardware accepted but never fed). */
+constexpr const char* kVersion = "0.12.0";
 
 class AboutView : public ui::View {
    public:

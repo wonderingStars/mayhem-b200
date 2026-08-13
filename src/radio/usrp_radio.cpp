@@ -579,29 +579,16 @@ void UsrpRadio::stop_rx() {
 }
 
 void UsrpRadio::rx_thread_main() {
-    uhd::rx_streamer::sptr stream;
-    {
-        std::lock_guard<std::mutex> g{config_mutex_};
-        stream = impl_->rx_stream;
-    }
-    if (!stream) {
-        rx_running_.store(false);
-        return;
-    }
-
-    uint32_t stream_generation = rx_stream_generation_.load(std::memory_order_acquire);
-    std::vector<cfloat> buffer(stream->get_max_num_samps());
+    uhd::rx_streamer::sptr stream; /* picked up by the first loop pass below */
     uhd::rx_metadata_t md;
+    std::vector<cfloat> buffer;
 
-    try {
-        uhd::stream_cmd_t cmd(uhd::stream_cmd_t::STREAM_MODE_START_CONTINUOUS);
-        cmd.stream_now = true;
-        stream->issue_stream_cmd(cmd);
-    } catch (const std::exception&) {
-        stats_.errors++;
-        rx_running_.store(false);
-        return;
-    }
+    /* One behind on purpose, so the very first pass goes through the same
+     * pickup-and-start path a mid-stream rebuild uses. The pre-loop copy of
+     * this code had its own start-command block that treated a failure as
+     * fatal — see the retry note below for why that was a thread killer. */
+    uint32_t stream_generation = rx_stream_generation_.load(std::memory_order_acquire) - 1;
+    unsigned consecutive_timeouts = 0;
 
     while (!rx_stop_.load()) {
         /* set_rx_rate rebuilds the streamer when UHD moves the B200's master
@@ -617,14 +604,40 @@ void UsrpRadio::rx_thread_main() {
             }
             if (!stream) break;
             buffer.assign(stream->get_max_num_samps(), cfloat{});
-            try {
-                uhd::stream_cmd_t cmd(uhd::stream_cmd_t::STREAM_MODE_START_CONTINUOUS);
-                cmd.stream_now = true;
-                stream->issue_stream_cmd(cmd);
-            } catch (const std::exception&) {
-                stats_.errors++;
-                break;
+
+            /* An app-to-app switch issues TWO rate changes back to back —
+             * the departing view restores its rate, the arriving one sets
+             * its own — so the streamer this pass just picked up may already
+             * have been replaced by the next rebuild, and its start command
+             * then throws. Treating that as fatal killed the thread on
+             * exactly this race (observed 2026-08-13 as the arriving app
+             * receiving nothing, with the failing predecessor pair changing
+             * from run to run — fmradio→search one session, scanner→search
+             * the next). A lost race means the generation moved: go pick up
+             * the newer streamer. Only a streamer that repeatedly refuses to
+             * start while its generation stays current is a genuinely broken
+             * radio. */
+            bool started = false;
+            bool superseded = false;
+            for (int attempt = 0; attempt < 3 && !rx_stop_.load(); attempt++) {
+                try {
+                    uhd::stream_cmd_t cmd(uhd::stream_cmd_t::STREAM_MODE_START_CONTINUOUS);
+                    cmd.stream_now = true;
+                    stream->issue_stream_cmd(cmd);
+                    started = true;
+                    break;
+                } catch (const std::exception& e) {
+                    stats_.errors++;
+                    if (rx_stream_generation_.load(std::memory_order_acquire) != stream_generation) {
+                        superseded = true;
+                        break;
+                    }
+                    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+                }
             }
+            if (superseded) continue; /* the loop head re-picks the new streamer */
+            if (!started) break;
+            consecutive_timeouts = 0;
         }
 
         size_t received = 0;
@@ -632,15 +645,69 @@ void UsrpRadio::rx_thread_main() {
             received = stream->recv(buffer.data(), buffer.size(), md, kRecvTimeout);
         } catch (const std::exception&) {
             stats_.errors++;
+            /* Same race as the start command above: recv on a streamer the
+             * next rebuild has already replaced throws rather than timing
+             * out. If the generation moved, this streamer's death is expected
+             * — pick up its replacement instead of dying with it. */
+            if (rx_stream_generation_.load(std::memory_order_acquire) != stream_generation) continue;
             break;
         }
 
         switch (md.error_code) {
             case uhd::rx_metadata_t::ERROR_CODE_NONE:
+                consecutive_timeouts = 0;
                 break;
-            case uhd::rx_metadata_t::ERROR_CODE_TIMEOUT:
+            case uhd::rx_metadata_t::ERROR_CODE_TIMEOUT: {
                 stats_.timeouts++;
+                /* --- Starvation watchdog ---------------------------------
+                 *
+                 * A CONTINUOUS stream that returns nothing for a whole recv
+                 * timeout is never healthy: at even the minimum 200 kSps a
+                 * 0.2 s window holds 40k samples. It happens in practice —
+                 * an app-to-app switch stacks a clock-moving rate change,
+                 * a bandwidth change, retunes and gain sets within
+                 * milliseconds, and some interleavings leave the B200 with
+                 * an accepted-but-dead stream: no exception anywhere (the
+                 * rebuild, the start command and recv all succeed — proven
+                 * by instrumentation, 2026-08-13), just silence. Rather
+                 * than enumerate every wedging interleaving, detect the
+                 * symptom and recover: after 3 dry windows re-issue the
+                 * start command; if that doesn't wake it, rebuild the
+                 * streamer outright and start again. Each escalation is
+                 * counted in stats_.errors so a radio that needed a kick is
+                 * visible rather than silently self-healed. */
+                consecutive_timeouts++;
+                if (consecutive_timeouts == 3) {
+                    stats_.errors++;
+                    try {
+                        uhd::stream_cmd_t cmd(uhd::stream_cmd_t::STREAM_MODE_START_CONTINUOUS);
+                        cmd.stream_now = true;
+                        stream->issue_stream_cmd(cmd);
+                    } catch (const std::exception&) {
+                        /* fall through to the rebuild escalation below */
+                        consecutive_timeouts = 5;
+                    }
+                } else if (consecutive_timeouts >= 6) {
+                    stats_.errors++;
+                    consecutive_timeouts = 0;
+                    std::lock_guard<std::mutex> g{config_mutex_};
+                    if (!impl_->usrp) break;
+                    try {
+                        impl_->rx_stream.reset();
+                        uhd::stream_args_t args("fc32", "sc16");
+                        args.channels = {kChannel};
+                        impl_->rx_stream = impl_->usrp->get_rx_stream(args);
+                        stream = impl_->rx_stream;
+                        buffer.assign(stream->get_max_num_samps(), cfloat{});
+                        uhd::stream_cmd_t cmd(uhd::stream_cmd_t::STREAM_MODE_START_CONTINUOUS);
+                        cmd.stream_now = true;
+                        stream->issue_stream_cmd(cmd);
+                    } catch (const std::exception&) {
+                        /* the next 6 dry windows will try again */
+                    }
+                }
                 continue;
+            }
             case uhd::rx_metadata_t::ERROR_CODE_OVERFLOW:
                 /* The FPGA's buffer filled because the host did not keep up.
                  * Samples are already lost; keep streaming rather than tearing
