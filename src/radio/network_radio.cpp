@@ -1205,16 +1205,41 @@ bool NetworkRadio::replay_settings(std::string& error) {
 
     /* Rate first: on most drivers the achievable frequency and bandwidth
      * depend on it, so replaying frequency against a default rate can land
-     * somewhere the server then has to round. */
+     * somewhere the server then has to round.
+     *
+     * `field` is not decoration. Gain is carried in "db" and everything here
+     * in "hz" — set_rx_gain() a few hundred lines above sends "db", the Go
+     * client sends "db" (webgui/internal/sdrclient/commands.go setDb), and the
+     * Go test server reads "db" (webgui/internal/webadapter/testserver_test.go).
+     * This loop used to send "hz" for all four, so a compliant server saw
+     * set_rx_gain with its only argument missing and applied the zero value:
+     * every reconnect quietly came back with the receiver turned down to the
+     * bottom of its range, which is exactly the failure the replay exists to
+     * prevent and looks identical to a dead antenna.
+     *
+     * `frequency` marks the settings for which zero is not a request but an
+     * absence. rx_rate_/rx_freq_/rx_bw_ are seeded from caps at open(), so a
+     * server that omitted a range leaves the corresponding value at 0, and
+     * replaying "set the bandwidth to 0 Hz" is at best rounded away and at
+     * worst an error that aborts the whole reconnect. Gain is not marked,
+     * because 0 dB — and, on some dongles, a negative figure — is a perfectly
+     * ordinary gain to ask for. */
     const struct {
         const char* cmd;
+        const char* field;
         double value;
+        bool frequency;
     } numeric[] = {
-        {"set_rx_rate", rx_rate_},   {"set_rx_freq", rx_freq_},
-        {"set_rx_gain", rx_gain_},   {"set_rx_bandwidth", rx_bw_},
+        {"set_rx_rate", "hz", rx_rate_, true},
+        {"set_rx_freq", "hz", rx_freq_, true},
+        {"set_rx_gain", "db", rx_gain_, false},
+        {"set_rx_bandwidth", "hz", rx_bw_, true},
     };
     for (const auto& s : numeric) {
-        const std::string args = "{\"hz\":" + net::format_json_number(s.value) + "}";
+        if (!std::isfinite(s.value)) continue;
+        if (s.frequency && s.value <= 0.0) continue;
+        const std::string args =
+            std::string{"{\""} + s.field + "\":" + net::format_json_number(s.value) + "}";
         if (!send_request_once(s.cmd, args, result, error)) return false;
     }
 

@@ -26,6 +26,7 @@
 #include "../audio/audio_out.hpp"
 #include "../dsp/demod.hpp"
 #include "../dsp/fir.hpp"
+#include "capability_policy.hpp"
 #include "radio_device.hpp"
 
 #include <atomic>
@@ -295,9 +296,19 @@ class ReceiverModel {
 
     /* Front-end gain in dB. The B200 has one continuous gain control rather
      * than the HackRF's separate LNA/VGA/AMP, so Mayhem's three controls
-     * collapse to this one plus the AD936x's own AGC. */
+     * collapse to this one plus the AD936x's own AGC.
+     *
+     * The request is validated and clamped against the attached device's
+     * published gain range by radio::choose_rx_gain() before it reaches the
+     * radio, so an app may ask for anything without knowing what is plugged in.
+     * A request that is not a finite number leaves the radio untouched. */
     void set_gain(double db);
     double gain() const;
+
+    /* What became of the last set_gain() request. Valid on the thread that
+     * called it (the UI thread); a caller that wants to say "76 dB (device
+     * maximum)" rather than showing a number the hardware ignored reads this. */
+    const GainChoice& gain_choice() const { return gain_choice_; }
 
     void set_agc(bool enabled);
     bool agc() const { return hw_agc_; }
@@ -311,9 +322,21 @@ class ReceiverModel {
     void set_volume(uint8_t volume_0_99);
     uint8_t volume() const;
 
-    /* Capture bandwidth. Larger gives a wider waterfall at more CPU cost. */
+    /* Capture bandwidth. Larger gives a wider waterfall at more CPU cost.
+     *
+     * The radio's ANALOG filter follows this: whenever the sample rate is
+     * applied to the device, radio::choose_rx_bandwidth() picks a filter width
+     * to match and it is written to the radio. See capability_policy.hpp for
+     * why a front end left wide while an app samples narrow folds its
+     * neighbours into the passband. */
     void set_sampling_rate(double hz);
     double sampling_rate() const { return sample_rate_; }
+
+    /* The analog filter width last chosen for the current sample rate, and how
+     * it relates to that rate. should_apply() is false when the device
+     * published no usable rx_bandwidth range, in which case nothing was written
+     * and the analog filter is wherever the device left it. */
+    const BandwidthChoice& rx_bandwidth_choice() const { return rx_bandwidth_choice_; }
 
     /* --- Readouts --- */
 
@@ -384,6 +407,10 @@ class ReceiverModel {
     void rebuild_chain();
     void retune_if_needed();
 
+    /* Points the radio's analog filter at the sample rate now in force. Called
+     * wherever the rate is pushed to the device, so the two never diverge. */
+    void apply_rx_bandwidth();
+
     RadioDevice& radio_;
     audio::AudioOut& audio_;
 
@@ -406,6 +433,11 @@ class ReceiverModel {
     uint8_t squelch_level_{0};
     bool hw_agc_{false};
     bool audio_agc_enabled_{true};
+
+    /* Explanations of the last front-end decisions, for the UI and the tests.
+     * Written and read on the control thread only. */
+    BandwidthChoice rx_bandwidth_choice_{};
+    GainChoice gain_choice_{};
 
     /* DSP chain — only touched by the DSP thread, or under chain_mutex_. */
     dsp::Nco nco_{};

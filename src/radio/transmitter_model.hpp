@@ -38,6 +38,7 @@
 #include "../dsp/demod.hpp"
 #include "../dsp/fir.hpp"
 #include "../dsp/modulate.hpp"
+#include "capability_policy.hpp"
 #include "radio_device.hpp"
 
 #include <atomic>
@@ -122,9 +123,20 @@ class TransmitterModel {
     float am_depth() const { return am_depth_; }
 
     /* Output gain in dB at the AD936x. The B200's TX gain range comes from
-     * caps().tx_gain; it is not the same control as amplitude(). */
+     * caps().tx_gain; it is not the same control as amplitude().
+     *
+     * The request is validated and clamped against that published range by
+     * radio::choose_tx_gain() before it reaches the radio. On this side the
+     * validation is not only about being heard: a gain request that is not a
+     * number would otherwise be formatted into an sdrlink control message as
+     * the bare token `nan`, and a transmit chain is the wrong place to find out
+     * that the far side rejected the message. */
     void set_gain(double db);
     double gain() const;
+
+    /* What became of the last set_gain() request. Valid on the thread that
+     * called it. */
+    const GainChoice& gain_choice() const { return gain_choice_; }
 
     /* Digital scaling of the baseband before it reaches the radio, 0..1.
      * Backing off from 1.0 leaves headroom for the interpolator's overshoot and
@@ -238,6 +250,10 @@ class TransmitterModel {
     float am_depth_{1.0f};
     float audio_gain_{1.0f};
     float amplitude_{0.85f};
+
+    /* Explanation of the last gain decision, for the UI and the tests. Written
+     * and read on the control thread only. */
+    GainChoice gain_choice_{};
 
     SubTone sub_tone_{SubTone::None};
     float sub_tone_mix_{0.15f};

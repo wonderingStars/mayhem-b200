@@ -582,6 +582,92 @@ TEST(network_radio_replays_the_tuning_it_had_before_the_drop) {
     CHECK(replayed.find("TX/RX") != std::string::npos);
 }
 
+TEST(network_radio_replays_gain_in_the_field_the_protocol_names) {
+    /* Every other replayed setting is carried in "hz"; gain is carried in "db"
+     * — NetworkRadio::set_rx_gain sends "db", the Go client sends "db"
+     * (webgui/internal/sdrclient/commands.go), and the Go test server reads
+     * "db" (webgui/internal/webadapter/testserver_test.go). Sending "hz" here
+     * is not a rejected message but a silent one: a compliant server finds no
+     * "db" argument and applies the zero value, so the receiver comes back from
+     * every reconnect turned down to the bottom of its range. Checking that the
+     * command NAME appears is not enough to catch that, which is why this looks
+     * at the argument. */
+    SocketQueue q;
+    /* Connection 1 answers the gain request, then dies on the next one. */
+    q.scripts.push_back(kHelloReply + kOpenReply + ok_reply(3, "{\"db\":40.0}"));
+    q.scripts.push_back(kHelloReply + kOpenReply + ok_replies(3, 7) +
+                        ok_reply(kFirstIdAfterReplay, "{\"hz\":100000042.0}"));
+
+    radio::NetworkRadio radio{q.factory()};
+    radio.set_sleep_fn([](int) {});
+    CHECK(radio.open("127.0.0.1:5960"));
+
+    CHECK_NEAR(radio.set_rx_gain(40.0), 40.0, 1e-9);
+    CHECK_NEAR(radio.set_rx_frequency(100'000'000.0), 100000042.0, 1e-6);
+    CHECK_EQ(radio.reconnects(), 1u);
+
+    CHECK(q.handed_out.size() >= 2);
+    if (q.handed_out.size() < 2) return;
+    const std::string& replayed = q.handed_out[1]->sent();
+
+    CHECK(replayed.find("\"cmd\":\"set_rx_gain\",\"args\":{\"db\":40}") != std::string::npos);
+    /* And the gain that was actually reached, not the caps minimum it was
+     * seeded with. */
+    CHECK(replayed.find("\"cmd\":\"set_rx_gain\",\"args\":{\"db\":0}") == std::string::npos);
+}
+
+/* Caps with no rx_bandwidth at all. PROTOCOL.md's own example omits fields, and
+ * range_from_json leaves an absent one as an all-zero Range. */
+const std::string kOpenReplyNoBandwidth =
+    "{\"id\":2,\"ok\":true,\"result\":{\"caps\":{"
+    "\"driver\":\"uhd\",\"label\":\"NO BW\",\"serial\":\"TESTSER\","
+    "\"rx_freq\":{\"min\":70000000,\"max\":6000000000,\"step\":1},"
+    "\"rx_gain\":{\"min\":0,\"max\":76,\"step\":1},"
+    "\"rx_rate\":{\"min\":200000,\"max\":61440000,\"step\":1},"
+    "\"rx_antennas\":[\"TX/RX\",\"RX2\"],\"tx_antennas\":[\"TX/RX\"],"
+    "\"has_rx\":true,\"has_tx\":true,\"full_duplex\":true,"
+    "\"master_clock_rate\":16000000}}}\n";
+
+TEST(network_radio_does_not_replay_a_setting_the_server_never_published) {
+    /* rx_rate_/rx_freq_/rx_bw_ are seeded from caps at open(), so a server that
+     * published no rx_bandwidth leaves that cached value at zero — and since
+     * ReceiverModel now declines to write an analog bandwidth it cannot
+     * validate (radio::choose_rx_bandwidth), nothing later fills it in either.
+     * Replaying "set the bandwidth to 0 Hz" is at best rounded away and at
+     * worst an error that aborts the entire reconnect, so it is skipped. */
+    SocketQueue q;
+    q.scripts.push_back(kHelloReply + kOpenReplyNoBandwidth +
+                        ok_reply(3, "{\"hz\":100000042.0}"));
+    /* Four replayed settings, not five: rate, freq, gain, antenna — ids 3..6,
+     * so the retried request lands on 7. */
+    q.scripts.push_back(kHelloReply + kOpenReplyNoBandwidth + ok_replies(3, 6) +
+                        ok_reply(7, "{\"db\":40.0}"));
+
+    radio::NetworkRadio radio{q.factory()};
+    radio.set_sleep_fn([](int) {});
+    CHECK(radio.open("127.0.0.1:5960"));
+    CHECK_NEAR(radio.caps().rx_bandwidth.max, 0.0, 1e-9); /* genuinely absent */
+
+    CHECK_NEAR(radio.set_rx_frequency(100'000'000.0), 100000042.0, 1e-6);
+
+    /* The drop, the replay, and the retry all have to succeed — which they only
+     * do if the reply script and the replayed command list agree. */
+    CHECK_NEAR(radio.set_rx_gain(40.0), 40.0, 1e-9);
+    CHECK(radio.is_open());
+    CHECK_EQ(radio.reconnects(), 1u);
+
+    CHECK(q.handed_out.size() >= 2);
+    if (q.handed_out.size() < 2) return;
+    const std::string& replayed = q.handed_out[1]->sent();
+
+    CHECK(replayed.find("set_rx_bandwidth") == std::string::npos);
+    /* Everything the server DID publish still comes back. */
+    CHECK(replayed.find("set_rx_rate") != std::string::npos);
+    CHECK(replayed.find("set_rx_freq") != std::string::npos);
+    CHECK(replayed.find("set_rx_gain") != std::string::npos);
+    CHECK(replayed.find("TX/RX") != std::string::npos);
+}
+
 TEST(network_radio_backs_off_between_attempts_and_caps_the_delay) {
     SocketQueue q;
     q.scripts.push_back(kHelloReply + kOpenReply); /* then every socket refuses */

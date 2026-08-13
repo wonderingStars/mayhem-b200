@@ -216,7 +216,15 @@ void TransmitterModel::set_am_depth(float depth) {
     }
 }
 
-void TransmitterModel::set_gain(double db) { radio_.set_tx_gain(db); }
+/* Validated in the shared layer for the same reason the receive side is: a
+ * backend is not a reliable place to catch this, since NetworkRadio only clamps
+ * against caps while its link is down. See capability_policy.hpp. */
+void TransmitterModel::set_gain(double db) {
+    gain_choice_ = choose_tx_gain(radio_.caps(), db);
+    if (!gain_choice_.should_apply()) return;
+    radio_.set_tx_gain(gain_choice_.gain_db);
+}
+
 double TransmitterModel::gain() const { return radio_.tx_gain(); }
 
 void TransmitterModel::set_amplitude(float amplitude) {
