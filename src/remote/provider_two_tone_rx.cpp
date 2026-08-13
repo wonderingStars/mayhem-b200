@@ -107,7 +107,7 @@ PanelData two_tone_panel(ui::View& view) {
 /* The id is the one src/apps/ui_two_tone_rx.cpp registers with app::Registrar.
  * Get it wrong and the provider is never reached: the app keeps showing the
  * portal's placeholder card and nothing anywhere reports an error. */
-const ProviderRegistrar reg_two_tone_rx{"two_tone_rx", two_tone_panel};
+const ProviderRegistrar reg_two_tone_rx{"two_tone_rx", PanelKind::Table, two_tone_panel};
 
 }  // namespace
 }  // namespace remote

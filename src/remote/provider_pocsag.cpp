@@ -69,7 +69,7 @@ PanelData pocsag_panel(ui::View& view) {
     return panel;
 }
 
-const ProviderRegistrar reg_pocsag{"pocsag", pocsag_panel};
+const ProviderRegistrar reg_pocsag{"pocsag", PanelKind::Console, pocsag_panel};
 
 }  // namespace
 }  // namespace remote

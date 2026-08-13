@@ -92,8 +92,9 @@
  *   RUN             GET /api/apps/current's `id`, polled while the grid is
  *                   on screen so navigating on the device itself shows here.
  *   NATIVE          nativePanelKindFor() -- see the long comment on it. The
- *                   API does not carry this per app yet, so today it is
- *                   unknown and the badge is not drawn at all.
+ *                   app's own `panel_kind`, which GET /api/apps now carries
+ *                   for every app that has a panel provider and omits for
+ *                   every app that does not.
  *
  * The receive-only lockout is deviceCanTransmit(), also unknown today; same
  * rule -- a state that cannot be verified is not asserted. Each of those two
@@ -632,23 +633,23 @@
   // nativePanelKindFor answers "does this app have a real browser panel?" —
   // the single source for the NATIVE badge.
   //
-  // The honest answer today is "unknown". GET /api/apps carries id,
-  // display_name, category, hardware_limited and icon (AppSummary in
-  // src/remote/app_data.cpp) and says nothing about panels; a panel kind
-  // exists only for the app that is *currently open*, on GET /api/panel.
-  // Deriving it from the id, or shipping "the apps that have panels" as a
-  // list here, would put a badge on the grid that goes stale the first time
-  // the C++ side registers or drops a panel provider — and a badge that
-  // lies about which apps have a real view is worse than no badge. So this
-  // returns null and the badge is simply not drawn on any tile.
+  // It reads the app's own `panel_kind`, which GET /api/apps carries per
+  // app (AppSummary in src/remote/app_data.cpp, from the kind each provider
+  // declares at registration in src/remote/provider_*.cpp). Deriving it from
+  // the id, or shipping "the apps that have panels" as a list here, would
+  // put a badge on the grid that goes stale the first time the C++ side
+  // registers or drops a panel provider — and a badge that lies about which
+  // apps have a real view is worse than no badge.
   //
-  // TODO(api): ONE FIELD MAKES IT REAL — `panel_kind` on each entry of
-  // GET /api/apps.
-  // That means AppSummary in src/remote/app_data.{hpp,cpp} publishing it,
-  // and client.App in internal/portal/client/types.go carrying it — the
-  // portal re-encodes that struct, so a field the Go type does not know
-  // about is dropped before the browser ever sees it. This function already
-  // reads `panel_kind` off the app object, so nothing else here changes.
+  // Absent is still a real answer and still means "no native panel": most
+  // apps have no provider and the key is simply not sent for them. The badge
+  // is not drawn in that case, exactly as before the field existed.
+  //
+  // Both halves of the hop have to carry it or it never arrives: client.App
+  // in internal/portal/client/types.go needs the field too, because the
+  // portal re-encodes that struct and drops anything the Go type does not
+  // know about. internal/portal/client/contract_test.go pins both ends
+  // against real captured backend output.
   function nativePanelKindFor(app) {
     var kind = (app && typeof app.panel_kind === 'string') ? app.panel_kind : '';
     // "screen" is the framebuffer mirror every app has, not a native panel.
@@ -858,8 +859,9 @@
 
     var locked = appIsLocked(app);
 
-    // NATIVE: drawn only when the panel kind is known and is a real panel.
-    // See nativePanelKindFor — today that is never, by design.
+    // NATIVE: drawn only when the panel kind is known and is a real panel,
+    // i.e. the app's own panel_kind is present and is not "screen". See
+    // nativePanelKindFor.
     var kind = nativePanelKindFor(app);
     if (kind) {
       card.appendChild(badgeNode('native', 'NATIVE',

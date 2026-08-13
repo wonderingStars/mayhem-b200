@@ -128,7 +128,7 @@ PanelData ble_panel(ui::View& view) {
     return panel;
 }
 
-const ProviderRegistrar reg_ble_rx{"blerx", ble_panel};
+const ProviderRegistrar reg_ble_rx{"blerx", PanelKind::Table, ble_panel};
 
 }  // namespace
 }  // namespace remote

@@ -67,7 +67,7 @@ PanelData flex_panel(ui::View& view) {
     return panel;
 }
 
-const ProviderRegistrar reg_flex_rx{"flex_rx", flex_panel};
+const ProviderRegistrar reg_flex_rx{"flex_rx", PanelKind::Console, flex_panel};
 
 }  // namespace
 }  // namespace remote

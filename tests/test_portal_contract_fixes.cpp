@@ -52,6 +52,7 @@
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
 /* Defined in src/remote/app_bridge.cpp. Declared here rather than in the
@@ -383,8 +384,15 @@ std::string http_post(uint16_t port, const std::string& target, const std::strin
  * It is deliberately inert unless armed: disarmed it reproduces, character
  * for character, the "no provider" panel AppBridge::refresh() would have
  * produced by itself, so registering it cannot change the answer any other
- * test in this binary gets. AppBridge has no way to unregister a provider,
- * which is why that matters. */
+ * test in this binary gets from GET /api/panel. AppBridge has no way to
+ * unregister a provider, which is why that matters.
+ *
+ * GET /api/apps is the one exception, and it is unavoidable: registering a
+ * provider is exactly what makes an app advertise a panel_kind, so once any
+ * test below has run, "calculator" carries panel_kind "image" in the app
+ * list for the rest of the binary. The apps_json tests therefore never assert
+ * anything about calculator — they use apps that no provider anywhere in this
+ * binary registers. */
 bool g_image_provider_armed = false;
 constexpr uint32_t kTestImageRev = 7;
 
@@ -416,7 +424,8 @@ struct ServerHarness {
     remote::RemoteServer server{};
 
     bool start() {
-        remote::AppBridge::instance().register_provider("calculator", calculator_image_panel);
+        remote::AppBridge::instance().register_provider("calculator", remote::PanelKind::Image,
+                                                        calculator_image_panel);
         if (!server.start(0)) return false;
         bridge.launch("calculator");
         remote::AppBridge::instance().refresh();
@@ -528,4 +537,107 @@ TEST(input_route_does_not_report_accepted_events_as_dropped_when_the_queue_is_fu
 
     std::vector<remote::RemoteInput> drained;
     remote::AppBridge::instance().drain_input_queue(drained);
+}
+
+/* ===========================================================================
+ * 5. GET /api/apps carries panel_kind per app
+ *
+ * The browser's app grid wants to badge which apps have a real native view.
+ * It cannot derive that: a panel kind existed only for the app that happened
+ * to be OPEN (GET /api/panel, GET /api/apps/current), so app.js's
+ * nativePanelKindFor() had nothing to read and drew no badge at all, and any
+ * list of "apps with panels" kept on the browser side would be wrong the
+ * first time a provider was added or dropped here.
+ *
+ * The rules these pin, in the order they matter:
+ *   - an app with a registered provider advertises that provider's kind;
+ *   - an app without one carries no panel_kind KEY at all, not an empty
+ *     string (Go's omitempty would drop an "" on the way to the browser
+ *     anyway, so a "" that meant something could not survive the hop);
+ *   - "screen" is never advertised. Every app can be mirrored as a
+ *     framebuffer, so publishing it would badge all ~104 tiles as native.
+ * ========================================================================= */
+
+namespace {
+
+/* The one app object out of GET /api/apps' flat array, as raw JSON text. An
+ * app entry contains no nested object, so the first '}' after its "id" closes
+ * it — which is what makes "this key is absent" checkable against the actual
+ * wire text rather than against a struct that could silently default it. */
+std::string app_object(const std::string& apps_json, const std::string& id) {
+    const std::string key = "{\"id\":\"" + id + "\"";
+    const size_t start = apps_json.find(key);
+    if (start == std::string::npos) return {};
+    const size_t end = apps_json.find('}', start);
+    if (end == std::string::npos) return {};
+    return apps_json.substr(start, end - start + 1);
+}
+
+}  // namespace
+
+TEST(apps_json_advertises_the_panel_kind_each_provider_registered) {
+    const std::string apps = remote::AppBridge::instance().apps_json();
+
+    /* One app per distinct panel kind that a provider registers, so a single
+     * kind wired up wrongly cannot hide behind the others. */
+    const std::pair<const char*, const char*> expected[] = {
+        {"adsbrx", "adsb"},        {"pocsag", "console"},   {"ais", "geotable"},
+        {"noaaapt_rx", "image"},   {"wardrivemap", "map"},  {"ert", "table"},
+        {"audio", "receiver"},     {"lookingglass", "spectrum"},
+    };
+    for (const auto& [id, kind] : expected) {
+        const std::string obj = app_object(apps, id);
+        CHECK(!obj.empty());
+        if (obj.empty()) continue;
+        CHECK(has(obj, std::string{"\"panel_kind\":\""} + kind + "\""));
+    }
+}
+
+TEST(apps_json_omits_the_panel_kind_key_for_an_app_with_no_provider) {
+    /* FM Radio and AFSK RX have no src/remote/provider_*.cpp, and nothing in
+     * this test binary registers one for them (the only test-registered
+     * provider is on Calculator). Absent must stay absent: the badge is drawn
+     * from the key's presence, so an empty string here would claim a native
+     * view that does not exist. */
+    const std::string apps = remote::AppBridge::instance().apps_json();
+
+    for (const char* id : {"fmradio", "afsk_rx"}) {
+        const std::string obj = app_object(apps, id);
+        CHECK(!obj.empty());
+        if (obj.empty()) continue;
+        /* The whole key, not just the value: "panel_kind":"" would pass a
+         * check for the absence of a kind name and still be on the wire. */
+        CHECK(!has(obj, "panel_kind"));
+        /* ...while the rest of the entry is unchanged. */
+        CHECK(has(obj, "\"hardware_limited\":"));
+    }
+}
+
+TEST(apps_json_never_advertises_the_screen_panel_kind) {
+    /* PanelKind::Screen is the framebuffer mirror EVERY app has. It is a
+     * legitimate answer on GET /api/panel and never a legitimate one here. */
+    const std::string apps = remote::AppBridge::instance().apps_json();
+    CHECK(!has(apps, "\"panel_kind\":\"screen\""));
+}
+
+TEST(app_summary_json_omits_panel_kind_unless_the_app_really_has_one) {
+    /* The serializer on its own, with no bridge and no registry: this is the
+     * gate the "never advertise screen" rule lives behind, so it is pinned
+     * where it is implemented as well as through the endpoint. */
+    remote::AppSummary s;
+    s.id = "fmradio";
+    s.name = "FM Radio";
+    s.category = "Receive";
+    s.icon_name = "fmradio";
+
+    CHECK(!has(remote::to_json(s).dump(), "panel_kind"));
+
+    /* A provider that declares Screen is saying "no native view"; publishing
+     * that literally would badge the tile. */
+    s.panel_kind = remote::PanelKind::Screen;
+    CHECK(!has(remote::to_json(s).dump(), "panel_kind"));
+
+    /* A real kind goes out under the wire key Go and the browser read. */
+    s.panel_kind = remote::PanelKind::GeoTable;
+    CHECK(has(remote::to_json(s).dump(), "\"panel_kind\":\"geotable\""));
 }

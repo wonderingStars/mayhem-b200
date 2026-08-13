@@ -83,23 +83,14 @@ std::string format_number(double d);
  * Data model
  * ------------------------------------------------------------------------- */
 
-/* One entry from app::AppRegistry, reshaped for the portal. */
-struct AppSummary {
-    std::string id;
-    std::string name;
-    std::string category;
-    bool hardware_limited{false};
-    /* ui::AppEntry's icon is an opaque framebuffer Bitmap* with no name, so
-     * there is nothing to read a real icon name from; the app id doubles as
-     * a stable slug the frontend can map to its own icon set. */
-    std::string icon_name;
-};
-JsonValue to_json(const AppSummary& a);
-
 /* What kind of panel a currently-open app's data can be rendered as.
  *
  * The enumerator's numeric value is never on the wire — panel_kind_name() is —
- * so new kinds are appended here rather than slotted in alphabetically. */
+ * so new kinds are appended here rather than slotted in alphabetically.
+ *
+ * Declared above AppSummary because that struct carries one: the app list has
+ * to say which apps have a real browser view, not just the one app that
+ * happens to be open. */
 enum class PanelKind : uint8_t {
     Table,
     Spectrum,
@@ -113,6 +104,34 @@ enum class PanelKind : uint8_t {
     GeoTable,
 };
 const char* panel_kind_name(PanelKind k);
+
+/* One entry from app::AppRegistry, reshaped for the portal. */
+struct AppSummary {
+    std::string id;
+    std::string name;
+    std::string category;
+    bool hardware_limited{false};
+    /* ui::AppEntry's icon is an opaque framebuffer Bitmap* with no name, so
+     * there is nothing to read a real icon name from; the app id doubles as
+     * a stable slug the frontend can map to its own icon set. */
+    std::string icon_name;
+    /* The kind of panel this app's registered provider publishes, or nothing
+     * at all when no provider is registered for it (see AppBridge's provider
+     * map). This is what lets the browser's app grid badge which apps have a
+     * real native view without keeping a list of app ids of its own — a list
+     * that would be wrong the first time a provider is added or dropped.
+     *
+     * An optional rather than a string: "no provider" and "some provider that
+     * published an empty kind" are different answers, and only the first one
+     * is ever true. to_json() omits the key entirely when it is unset, so
+     * absent on the wire means absent here. */
+    std::optional<PanelKind> panel_kind{};
+};
+/* Emits panel_kind only for an app that really has a native panel:
+ * PanelKind::Screen is the framebuffer mirror EVERY app has, so advertising
+ * it would badge all 104 of them as having a native view. See to_json()'s
+ * comment in app_data.cpp — this is the one gate that rule lives behind. */
+JsonValue to_json(const AppSummary& a);
 
 /* A ui::RecentEntriesTable, walked into rows of already-formatted strings.
  * See app_bridge.hpp's table_data_from_entries() for the generic adapter

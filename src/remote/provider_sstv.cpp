@@ -89,7 +89,7 @@ PanelData sstv_panel(ui::View& view) {
     return panel;
 }
 
-const ProviderRegistrar reg_sstvrx{"sstvrx", sstv_panel};
+const ProviderRegistrar reg_sstvrx{"sstvrx", PanelKind::Image, sstv_panel};
 
 }  // namespace
 }  // namespace remote

@@ -88,7 +88,7 @@ PanelData wefax_panel(ui::View& view) {
     return panel;
 }
 
-const ProviderRegistrar reg_wefax_rx{"wefax_rx", wefax_panel};
+const ProviderRegistrar reg_wefax_rx{"wefax_rx", PanelKind::Image, wefax_panel};
 
 }  // namespace
 }  // namespace remote

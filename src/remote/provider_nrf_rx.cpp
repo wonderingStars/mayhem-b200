@@ -122,7 +122,7 @@ PanelData nrf_panel(ui::View& view) {
 /* The id src/apps/ui_nrf_rx.cpp registers with app::Registrar. A wrong id here
  * registers a provider that never fires and leaves the portal showing the
  * placeholder card, which is why a test drives this end to end. */
-const ProviderRegistrar reg_nrf_rx{"nrf_rx", nrf_panel};
+const ProviderRegistrar reg_nrf_rx{"nrf_rx", PanelKind::Table, nrf_panel};
 
 }  // namespace
 }  // namespace remote

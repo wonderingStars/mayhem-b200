@@ -250,8 +250,8 @@ AppBridge& AppBridge::instance() {
 }
 
 AppBridge::AppBridge() {
-    register_provider("audio", receiver_panel);
-    register_provider("lookingglass", spectrum_panel);
+    register_provider("audio", PanelKind::Receiver, receiver_panel);
+    register_provider("lookingglass", PanelKind::Spectrum, spectrum_panel);
 
     /* Gives GET /api/status a valid, honestly-"nothing yet" body if it lands
      * before the UI thread's first refresh() — same shape refresh() itself
@@ -271,9 +271,9 @@ AppBridge::AppBridge() {
     status_json_cache_ = status.dump();
 }
 
-void AppBridge::register_provider(std::string app_id, PanelProviderFn fn) {
+void AppBridge::register_provider(std::string app_id, PanelKind kind, PanelProviderFn fn) {
     std::lock_guard<std::mutex> lk(providers_mutex_);
-    providers_[std::move(app_id)] = std::move(fn);
+    providers_[std::move(app_id)] = Provider{std::move(fn), kind};
 }
 
 void AppBridge::refresh() {
@@ -363,7 +363,7 @@ void AppBridge::refresh() {
         {
             std::lock_guard<std::mutex> lk(providers_mutex_);
             const auto it = providers_.find(app_id);
-            if (it != providers_.end()) provider = it->second;
+            if (it != providers_.end()) provider = it->second.fn;
         }
 
         ui::View* top = (ctx.nav != nullptr) ? ctx.nav->top() : nullptr;
@@ -594,6 +594,17 @@ std::string AppBridge::apps_json() const {
      * a second place for the two halves to disagree. Iterating the categories
      * in order still gives the flat list a sensible default ordering for any
      * client that does no grouping of its own. */
+    /* Snapshot the registered kinds once rather than locking per app: the map
+     * is ~20 entries against ~104 apps, and holding the lock across the whole
+     * loop would block a static-init registration behind a connection thread
+     * (registration is legal at any time, per register_provider). */
+    std::unordered_map<std::string, PanelKind> kinds;
+    {
+        std::lock_guard<std::mutex> lk(providers_mutex_);
+        kinds.reserve(providers_.size());
+        for (const auto& [id, p] : providers_) kinds.emplace(id, p.kind);
+    }
+
     JsonValue apps_arr = JsonValue::array();
     for (auto cat : kAllCategories) {
         for (const auto* e : app::AppRegistry::instance().by_category(cat)) {
@@ -603,6 +614,11 @@ std::string AppBridge::apps_json() const {
             s.category = app::category_name(e->category);
             s.hardware_limited = e->hardware_limited;
             s.icon_name = e->id;
+            /* Left unset — and so omitted from the JSON — for every app with
+             * no provider, which is most of them. to_json() also drops a
+             * declared PanelKind::Screen; see its comment. */
+            if (const auto it = kinds.find(e->id); it != kinds.end())
+                s.panel_kind = it->second;
             apps_arr.push_back(to_json(s));
         }
     }
@@ -658,8 +674,8 @@ void AppBridge::request_home() {
     queue_.push_back({RequestKind::Home, std::string{}});
 }
 
-ProviderRegistrar::ProviderRegistrar(std::string app_id, PanelProviderFn fn) {
-    AppBridge::instance().register_provider(std::move(app_id), std::move(fn));
+ProviderRegistrar::ProviderRegistrar(std::string app_id, PanelKind kind, PanelProviderFn fn) {
+    AppBridge::instance().register_provider(std::move(app_id), kind, std::move(fn));
 }
 
 }  // namespace remote

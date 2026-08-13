@@ -94,7 +94,7 @@ PanelData wardrive_panel(ui::View& view) {
     return panel;
 }
 
-const ProviderRegistrar reg_wardrivemap{"wardrivemap", wardrive_panel};
+const ProviderRegistrar reg_wardrivemap{"wardrivemap", PanelKind::Map, wardrive_panel};
 
 }  // namespace
 }  // namespace remote

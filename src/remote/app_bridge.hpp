@@ -169,8 +169,20 @@ class AppBridge {
     /* Opt-in registration, safe to call at static-init time (as
      * app::Registrar is) or later; either way it only ever touches its own
      * map under a mutex. A second registration for the same app id replaces
-     * the first. */
-    void register_provider(std::string app_id, PanelProviderFn fn);
+     * the first.
+     *
+     * `kind` is the panel kind this provider publishes when it has data — a
+     * provider produces exactly one shape, and it is declared here so
+     * apps_json() can answer "does this app have a native browser view?" for
+     * every app at once, not just for whichever one is open. It is a required
+     * argument, not a defaulted one: a provider that forgot to say would
+     * silently never be badged, and the compiler catching it at every
+     * registration site is worth the six characters.
+     *
+     * `fn` may still return PanelKind::Screen at runtime (every provider does,
+     * when its app is not the open view or has decoded nothing yet); that is a
+     * per-poll answer and does not change what the app is capable of. */
+    void register_provider(std::string app_id, PanelKind kind, PanelProviderFn fn);
 
     /* --- UI thread only ----------------------------------------------- */
 
@@ -292,8 +304,16 @@ class AppBridge {
     mutable std::mutex queue_mutex_;
     std::deque<QueuedRequest> queue_;
 
+    /* One map, not two: the provider and the kind it advertises are set
+     * together and read together, and a second map keyed by the same id is a
+     * second thing to keep in step. */
+    struct Provider {
+        PanelProviderFn fn;
+        PanelKind kind{PanelKind::Screen};
+    };
+
     mutable std::mutex providers_mutex_;
-    std::unordered_map<std::string, PanelProviderFn> providers_;
+    std::unordered_map<std::string, Provider> providers_;
 
     mutable std::mutex cache_mutex_;
     std::string current_app_id_{};
@@ -324,17 +344,22 @@ class AppBridge {
 
 /* File-scope self-registration helper, mirroring app::Registrar:
  *
- *   namespace { const remote::ProviderRegistrar reg_foo{"foo", [](ui::View& v){
- *       auto& view = static_cast<FooView&>(v);
- *       return remote::PanelData{...};
+ *   namespace { const remote::ProviderRegistrar reg_foo{
+ *       "foo", remote::PanelKind::Table, [](ui::View& v){
+ *           auto& view = static_cast<FooView&>(v);
+ *           return remote::PanelData{...};
  *   }}; }
  *
  * declared at file scope in a src/remote/provider_*.cpp. Note that `v` is
  * nav->top(), which is NOT the app's root view once the local operator has
  * drilled into a detail page — walk NavigationView::at_depth() for the view
- * that owns the data rather than static_cast'ing the top blindly. */
+ * that owns the data rather than static_cast'ing the top blindly.
+ *
+ * The kind sits before the function so a multi-line lambda stays the last
+ * argument. It must match the kind the provider actually sets on its
+ * PanelData; it is what GET /api/apps advertises for this app. */
 struct ProviderRegistrar {
-    ProviderRegistrar(std::string app_id, PanelProviderFn fn);
+    ProviderRegistrar(std::string app_id, PanelKind kind, PanelProviderFn fn);
 };
 
 }  // namespace remote

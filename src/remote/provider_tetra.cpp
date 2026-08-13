@@ -73,7 +73,7 @@ PanelData tetra_panel(ui::View& view) {
     return panel;
 }
 
-const ProviderRegistrar reg_tetra_rx{"tetra_rx", tetra_panel};
+const ProviderRegistrar reg_tetra_rx{"tetra_rx", PanelKind::Console, tetra_panel};
 
 }  // namespace
 }  // namespace remote

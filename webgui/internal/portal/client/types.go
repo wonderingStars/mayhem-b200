@@ -40,6 +40,25 @@ type App struct {
 	// short code); empty when the app has none. The UI falls back to a
 	// generic per-category icon when this is empty.
 	Icon string `json:"icon,omitempty"`
+	// PanelKind is the kind of native browser panel this app publishes
+	// ("adsb", "console", "geotable", ...), or empty when it has no panel
+	// provider at all — which is most apps. It is what lets the grid badge
+	// which tiles have a real structured view; app.js's nativePanelKindFor()
+	// reads it straight off each app object.
+	//
+	// The backend never sends "screen" here. Every app can be mirrored as a
+	// framebuffer, so a "screen" would badge the whole grid and mean nothing
+	// (see to_json(AppSummary) in src/remote/app_data.cpp).
+	//
+	// This struct is what the portal server RE-ENCODES for the browser, so a
+	// field missing here is a field the browser can never see however
+	// faithfully the C++ side sends it — that is exactly how can_go_back,
+	// version and CurrentApp.PanelKind each went missing before
+	// contract_test.go existed. omitempty is deliberate and safe in this one
+	// direction: absent and "" both mean "no native panel", so the round trip
+	// cannot lose a distinction (unlike Status.CanTransmit, where an explicit
+	// false is a real answer and the field has to be a pointer).
+	PanelKind string `json:"panel_kind,omitempty"`
 }
 
 // AppsResponse is the payload of GET /api/apps.
@@ -64,9 +83,10 @@ type CurrentApp struct {
 	// {"id":"adsbrx",...,"panel_kind":"adsb",...} and the browser got no
 	// panel_kind at all.
 	//
-	// Note this is only ever the ONE app that is open. GET /api/apps carries
-	// no panel kind per app (see to_json(AppSummary) in app_data.cpp), which
-	// is why the grid cannot draw a truthful NATIVE badge yet.
+	// Note this is only ever the ONE app that is open, and unlike App's
+	// panel_kind it CAN be "screen" — that is the honest answer for an app
+	// with no provider, and the browser mounts the framebuffer mirror on it.
+	// App.PanelKind is the per-app capability the grid badges from.
 	PanelKind string `json:"panel_kind,omitempty"`
 	CanGoBack bool   `json:"can_go_back"`
 }

@@ -144,7 +144,7 @@ PanelData weather_panel(ui::View& view) {
 /* The id is the one src/apps/ui_weather.cpp registers with app::Registrar. Get
  * it wrong and the provider is never reached: the app keeps showing the portal's
  * placeholder card and nothing anywhere reports an error. */
-const ProviderRegistrar reg_weather{"weather", weather_panel};
+const ProviderRegistrar reg_weather{"weather", PanelKind::Table, weather_panel};
 
 }  // namespace
 }  // namespace remote

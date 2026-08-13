@@ -129,7 +129,7 @@ PanelData epirb_panel(ui::View& view) {
     return panel;
 }
 
-const ProviderRegistrar reg_epirb_rx{"epirb_rx", epirb_panel};
+const ProviderRegistrar reg_epirb_rx{"epirb_rx", PanelKind::Table, epirb_panel};
 
 }  // namespace
 }  // namespace remote
