@@ -179,3 +179,59 @@ func keysOf(m map[string]json.RawMessage) []string {
 	}
 	return out
 }
+
+// can_transmit exists so a receive-only SDR does not present ~28 transmit
+// apps that cannot work. Its whole value depends on three states staying
+// distinguishable end to end -- true, false, and "the backend has not said"
+// -- so each is pinned here rather than only the happy one.
+//
+// The false case is the one with a trap in it. As a plain bool with
+// omitempty, an explicit false marshals away to nothing, arrives at the
+// browser as absent, and reads as unknown -- which unlocks exactly the apps
+// this field exists to lock. That is why Status.CanTransmit is a *bool, and
+// why this test round-trips through Marshal rather than only decoding.
+func TestContract_CanTransmitSurvivesTheRoundTrip(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		in   string
+		want *bool
+	}{
+		{"receive-only radio", `{"device":"RTL-SDR","can_transmit":false}`, boolPtr(false)},
+		{"full radio", `{"device":"B200","can_transmit":true}`, boolPtr(true)},
+		{"no device open", `{"device":"no device"}`, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var st Status
+			if err := json.Unmarshal([]byte(tc.in), &st); err != nil {
+				t.Fatalf("decode: %v", err)
+			}
+			if (st.CanTransmit == nil) != (tc.want == nil) {
+				t.Fatalf("CanTransmit nil-ness = %v, want %v", st.CanTransmit, tc.want)
+			}
+			if st.CanTransmit != nil && *st.CanTransmit != *tc.want {
+				t.Errorf("CanTransmit = %v, want %v", *st.CanTransmit, *tc.want)
+			}
+
+			// The portal re-encodes this struct on the way to the browser, so
+			// the value has to survive that too, not just the decode.
+			out, err := json.Marshal(st)
+			if err != nil {
+				t.Fatalf("encode: %v", err)
+			}
+			var back Status
+			if err := json.Unmarshal(out, &back); err != nil {
+				t.Fatalf("re-decode: %v", err)
+			}
+			if (back.CanTransmit == nil) != (tc.want == nil) {
+				t.Fatalf("after re-encode CanTransmit nil-ness = %v, want %v (this is "+
+					"the omitempty trap: an explicit false must not become absent)",
+					back.CanTransmit, tc.want)
+			}
+			if back.CanTransmit != nil && *back.CanTransmit != *tc.want {
+				t.Errorf("after re-encode CanTransmit = %v, want %v", *back.CanTransmit, *tc.want)
+			}
+		})
+	}
+}
+
+func boolPtr(b bool) *bool { return &b }

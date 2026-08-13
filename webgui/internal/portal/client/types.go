@@ -107,7 +107,18 @@ type Status struct {
 	// field missing here is dropped no matter what the backend sends --
 	// which is exactly how can_go_back and version went missing before
 	// contract_test.go existed.
-	Link         string `json:"link,omitempty"`
+	Link string `json:"link,omitempty"`
+	// CanTransmit is whether the attached radio is CAPABLE of transmitting,
+	// which is not the same question as Transmitting (what it is doing right
+	// now). The frontend locks the transmit apps on false and leaves them
+	// alone on nil, so nil has to mean "the backend has not said" — with no
+	// device open there is no honest answer.
+	//
+	// A pointer, deliberately. As a plain bool with omitempty, an explicit
+	// false would be indistinguishable from an absent field on the way out,
+	// so a receive-only dongle would report "unknown" and the ~28 transmit
+	// apps would stay unlocked — the exact case this field exists to catch.
+	CanTransmit  *bool  `json:"can_transmit,omitempty"`
 	Receiving    bool   `json:"receiving"`
 	Transmitting bool   `json:"transmitting"`
 	Version      string `json:"version,omitempty"`

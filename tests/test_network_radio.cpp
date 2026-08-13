@@ -704,13 +704,29 @@ TEST(network_radio_notices_a_dead_link_while_completely_idle) {
     CHECK(radio.open("127.0.0.1:5960"));
     CHECK(radio.link_state() == radio::NetworkRadio::LinkState::Connected);
 
-    /* Touch nothing at all. The keepalive is the only thing that can find out. */
+    /* Touch nothing at all. The keepalive is the only thing that can find out.
+     *
+     * Wait for Disconnected specifically, NOT merely for "no longer
+     * Connected". Once the ladder gives up, the next keepalive tick starts
+     * another one, so the state genuinely cycles Disconnected -> Reconnecting
+     * -> Disconnected for as long as the server stays away -- and that cycling
+     * is the feature, since it is what picks a restarted server back up.
+     * Breaking out on the first non-Connected sample caught Reconnecting about
+     * one run in four. */
+    bool left_connected = false;
+    bool reached_disconnected = false;
     for (int waited = 0; waited < 4000; waited += 25) {
-        if (radio.link_state() != radio::NetworkRadio::LinkState::Connected) break;
+        const auto state = radio.link_state();
+        if (state != radio::NetworkRadio::LinkState::Connected) left_connected = true;
+        if (state == radio::NetworkRadio::LinkState::Disconnected) {
+            reached_disconnected = true;
+            break;
+        }
         std::this_thread::sleep_for(std::chrono::milliseconds(25));
     }
 
-    CHECK(radio.link_state() == radio::NetworkRadio::LinkState::Disconnected);
+    CHECK(left_connected);
+    CHECK(reached_disconnected);
     CHECK(!radio.is_open());
 }
 

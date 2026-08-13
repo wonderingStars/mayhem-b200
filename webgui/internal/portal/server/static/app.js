@@ -659,18 +659,16 @@
   // deviceCanTransmit reports whether the attached radio can transmit at
   // all: true, false, or null for "the API has not said".
   //
-  // Null today. The value exists on the C++ side as DeviceCaps.has_tx
-  // (src/radio/radio_device.hpp — "An RTL-SDR is receive-only"), but no hop
-  // puts it on the wire: GET /api/status sends device, device_ok, receiving,
-  // transmitting, version and levels.
+  // Sourced from DeviceCaps.has_tx (src/radio/radio_device.hpp — "An RTL-SDR
+  // is receive-only"), published on GET /api/status as `can_transmit` and
+  // carried through client.Status. It is only sent while a device is open,
+  // because with nothing attached there is no honest answer — so absent
+  // genuinely means "unknown" here and must keep leaving the transmit apps
+  // alone rather than locking them.
   //
-  // TODO(api): make it real with a `can_transmit` boolean on GET /api/status
-  // — set from caps().has_tx in app_bridge.cpp's status object, and mirrored
-  // on client.Status in internal/portal/client/types.go, for the same
-  // re-encoding reason as above. `receiving`/`transmitting` are
-  // NOT that field — they say what the radio is doing this second, not what
-  // it is able to do, and treating them as capability would lock every
-  // transmit app whenever the radio happened to be idle.
+  // `receiving`/`transmitting` are NOT this field: they say what the radio is
+  // doing this second, not what it is able to do, and reading them as
+  // capability would lock every transmit app whenever the radio was idle.
   function deviceCanTransmit() {
     var v = state.status ? state.status.can_transmit : undefined;
     return typeof v === 'boolean' ? v : null;

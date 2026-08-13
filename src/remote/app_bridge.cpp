@@ -291,6 +291,16 @@ void AppBridge::refresh() {
      * plain offline device hides the fact that it is coming back. */
     status.set("link", JsonValue::string(ctx.radio != nullptr ? ctx.radio->link_state_string()
                                                              : "disconnected"));
+    /* Whether the attached radio CAN transmit -- not whether it is doing so.
+     * Only sent when a device is actually open: with nothing attached the
+     * answer is unknown, and the frontend treats an absent field as unknown
+     * and leaves the transmit apps alone. Sending a default here would be
+     * guessing, and guessing "true" hands a user of a receive-only dongle
+     * ~28 apps that cannot work. DeviceCaps defaults has_tx to true, so the
+     * device_open guard is doing real work. */
+    if (device_open) {
+        status.set("can_transmit", JsonValue::boolean(ctx.radio->caps().has_tx));
+    }
     status.set("receiving", JsonValue::boolean((ctx.receiver != nullptr) && ctx.receiver->running()));
     status.set("transmitting", JsonValue::boolean((ctx.radio != nullptr) && ctx.radio->tx_running()));
     status.set("version", JsonValue::string(app::kVersion));

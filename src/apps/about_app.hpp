@@ -42,8 +42,12 @@ namespace app {
  * coming back is distinguishable from one that has given up.
  * 0.11.1: a keepalive ping, so an IDLE client notices a dead link at all.
  * Verified against a live sdrlink server and a B200: without it, killing the
- * server left the client reporting "connected" indefinitely. */
-constexpr const char* kVersion = "0.11.1";
+ * server left the client reporting "connected" indefinitely.
+ * 0.11.2: GET /api/status carries can_transmit, from the attached radio's
+ * DeviceCaps.has_tx, so the portal can lock the transmit apps on a
+ * receive-only SDR instead of offering ~28 apps that cannot work. Sent only
+ * while a device is open: with nothing attached there is no honest answer. */
+constexpr const char* kVersion = "0.11.2";
 
 class AboutView : public ui::View {
    public:
