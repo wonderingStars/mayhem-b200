@@ -18,10 +18,11 @@
  *
  *  3. Raising the rate is only a gain if the extra samples are INTEGRATED
  *     rather than thrown away. ReceiverModel opens the analog front end to
- *     0.8 * the sample rate, so 8 Msps admits four times the noise power of
- *     2 Msps; subsampling back down keeps all of it. The decimator that makes
- *     the higher rate pay is checked by measuring the signal level each path
- *     needs to decode, on the same waveform and the same noise realisation.
+ *     match the sample rate (radio::choose_rx_bandwidth), so 8 Msps admits
+ *     four times the noise power of 2 Msps; subsampling back down keeps all of
+ *     it. The decimator that makes the higher rate pay is checked by measuring
+ *     the signal level each path needs to decode, on the same waveform and the
+ *     same noise realisation.
  *
  * SPDX-License-Identifier: GPL-2.0-or-later
  */
@@ -96,7 +97,7 @@ std::vector<float> ppm_envelope(const std::vector<uint8_t>& bytes,
  * test can measure is what happens to the NOISE.
  *
  * `noise_rms` is the per-component sigma AT THE FAST RATE, which is how the
- * radio delivers it: the front end is open to 0.8 * the sample rate, so four
+ * radio delivers it: the front end is opened to match the sample rate, so four
  * times the rate carries four times the noise power per sample. */
 std::vector<dsp::cfloat> fast_burst(const std::vector<float>& envelope,
                                     size_t factor,

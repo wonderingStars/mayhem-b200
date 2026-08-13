@@ -114,6 +114,13 @@ class CounterRadio : public radio::RadioDevice {
     bool is_open() const override { return true; }
 
     const radio::DeviceCaps& caps() const override { return caps_; }
+
+    /* Lets a test say "this is a device that publishes X" and then watch what
+     * the shared radio layer does about it. The constructor leaves rx_bandwidth
+     * and tx_gain as all-zero Ranges, which is this codebase's "unknown" and is
+     * also what an sdrlink server that omits the field produces, so a test that
+     * wants a device with a real analog filter has to say so. */
+    radio::DeviceCaps& mutable_caps() { return caps_; }
     const std::string& last_error() const override { return error_; }
     const char* driver_name() const override { return "counter"; }
 

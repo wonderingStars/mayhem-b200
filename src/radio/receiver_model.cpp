@@ -401,9 +401,7 @@ bool ReceiverModel::start() {
     if (raw_tap_.is_open())
         raw_tap_.restart(RawSampleTap::capacity_for(sample_rate_, raw_tap_seconds_));
 
-    /* Let the analog filter pass the whole captured band; anything narrower is
-     * the channel filter's job and doing it in the AD936x would fight the NCO. */
-    radio_.set_rx_bandwidth(sample_rate_ * 0.8);
+    apply_rx_bandwidth();
 
     retune_if_needed();
     chain_dirty_.store(true);
@@ -501,7 +499,27 @@ void ReceiverModel::set_wfm_configuration(WfmConfig cfg) {
     chain_dirty_.store(true);
 }
 
-void ReceiverModel::set_gain(double db) { radio_.set_rx_gain(db); }
+/* Let the analog filter pass the captured band and no more. Anything narrower
+ * is the channel filter's job and doing it in the AD936x would fight the NCO;
+ * anything wider folds the neighbours in. choose_rx_bandwidth() decides where
+ * that lands on the attached device and whether the device said enough for the
+ * question to be answerable at all — see capability_policy.hpp. */
+void ReceiverModel::apply_rx_bandwidth() {
+    rx_bandwidth_choice_ = choose_rx_bandwidth(radio_.caps(), sample_rate_);
+    if (rx_bandwidth_choice_.should_apply())
+        radio_.set_rx_bandwidth(rx_bandwidth_choice_.bandwidth_hz);
+}
+
+/* Gain is the one front-end control an app hands straight from a UI field to
+ * the radio, so it is the one most likely to arrive out of range — or, from a
+ * remote caller, not a number at all. Validate once here rather than trusting
+ * each backend to do it: NetworkRadio only clamps while its link is DOWN. */
+void ReceiverModel::set_gain(double db) {
+    gain_choice_ = choose_rx_gain(radio_.caps(), db);
+    if (!gain_choice_.should_apply()) return;
+    radio_.set_rx_gain(gain_choice_.gain_db);
+}
+
 double ReceiverModel::gain() const { return radio_.rx_gain(); }
 
 void ReceiverModel::set_agc(bool enabled) {
@@ -531,7 +549,7 @@ void ReceiverModel::set_sampling_rate(double hz) {
     if (was_running) stop();
 
     sample_rate_ = radio_.set_rx_rate(hz);
-    radio_.set_rx_bandwidth(sample_rate_ * 0.8);
+    apply_rx_bandwidth();
     chain_dirty_.store(true);
 
     if (was_running) start();
