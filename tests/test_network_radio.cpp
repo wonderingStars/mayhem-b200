@@ -21,6 +21,7 @@
 #include <cstring>
 #include <memory>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace {
@@ -675,4 +676,59 @@ TEST(network_radio_does_not_reconnect_when_the_server_merely_says_no) {
     CHECK_EQ(q.handed_out.size(), size_t{1});
     CHECK(radio.link_state() == radio::NetworkRadio::LinkState::Connected);
     CHECK(radio.is_open());
+}
+
+/* --- The keepalive ----------------------------------------------------------
+ *
+ * These exist because of a bug the fake-socket tests structurally could not
+ * find. Every reconnect test above probes the link by CALLING something, so
+ * they all proved recovery works for a client that is busy. Against a real
+ * sdrlink server on 2026-08-13, killing the server left an idle client
+ * reporting link "connected" and device_ok true for as long as it was watched:
+ * with no stream running and nobody touching the controls, nothing issued a
+ * request, so nothing failed, so nothing noticed. A radio that reports itself
+ * present when the server is gone is precisely the lie LinkState exists to
+ * prevent. */
+
+TEST(network_radio_notices_a_dead_link_while_completely_idle) {
+    SocketQueue q;
+    q.scripts.push_back(kHelloReply + kOpenReply); /* dies after the handshake */
+
+    radio::NetworkRadio radio{q.factory()};
+    radio.set_sleep_fn([](int) {});
+    radio::NetworkRadio::ReconnectPolicy policy;
+    policy.max_attempts = 1;
+    radio.set_reconnect_policy(policy);
+    radio.set_keepalive_interval_ms(25);
+
+    CHECK(radio.open("127.0.0.1:5960"));
+    CHECK(radio.link_state() == radio::NetworkRadio::LinkState::Connected);
+
+    /* Touch nothing at all. The keepalive is the only thing that can find out. */
+    for (int waited = 0; waited < 4000; waited += 25) {
+        if (radio.link_state() != radio::NetworkRadio::LinkState::Connected) break;
+        std::this_thread::sleep_for(std::chrono::milliseconds(25));
+    }
+
+    CHECK(radio.link_state() == radio::NetworkRadio::LinkState::Disconnected);
+    CHECK(!radio.is_open());
+}
+
+TEST(network_radio_keepalive_can_be_switched_off) {
+    /* The negative control for the test above: with no keepalive, an idle
+     * client genuinely cannot know, and must not pretend otherwise by
+     * guessing. It keeps reporting what it last knew until something asks. */
+    SocketQueue q;
+    q.scripts.push_back(kHelloReply + kOpenReply);
+
+    radio::NetworkRadio radio{q.factory()};
+    radio.set_sleep_fn([](int) {});
+    radio.set_keepalive_interval_ms(0);
+
+    CHECK(radio.open("127.0.0.1:5960"));
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+
+    CHECK(radio.link_state() == radio::NetworkRadio::LinkState::Connected);
+    /* Only one connection was ever made: nothing probed in the background. */
+    CHECK_EQ(q.handed_out.size(), size_t{1});
 }

@@ -251,6 +251,28 @@ class NetworkRadio : public RadioDevice {
      * it, and can assert on the delays that were actually asked for. */
     void set_sleep_fn(std::function<void(int ms)> fn) { sleep_fn_ = std::move(fn); }
 
+    /* --- Keepalive ----------------------------------------------------------
+     *
+     * Reconnection above is driven by a request failing, which means an idle
+     * client never finds out it is talking to nothing. Measured against a real
+     * server on 2026-08-13: killing sdrlink left the client reporting
+     * link "connected" and device_ok true indefinitely, because with no stream
+     * running and nobody touching the controls, nothing issued a request to
+     * fail. The fake-socket tests could not see it -- every one of them probes
+     * by calling a setter.
+     *
+     * So a supervisor thread sends a cheap `ping` on the control channel and
+     * lets the ordinary failure path do the rest. It keeps probing after the
+     * ladder has given up too, which is what makes an sdrlink server that is
+     * restarted (and takes far longer to come back than the ladder runs for)
+     * reconnect on its own rather than needing the app restarted.
+     *
+     * Zero disables it. The interval is a real sleep, deliberately not
+     * sleep_fn_: a test that stubs the backoff to a no-op would otherwise spin
+     * this thread at full tilt. */
+    void set_keepalive_interval_ms(int ms) { keepalive_interval_ms_ = ms; }
+    int keepalive_interval_ms() const { return keepalive_interval_ms_; }
+
     const DeviceCaps& caps() const override { return caps_; }
     const std::string& last_error() const override { return last_error_; }
 
@@ -359,6 +381,12 @@ class NetworkRadio : public RadioDevice {
      * if it was aborted. */
     bool backoff_sleep(int ms, const std::atomic<bool>& abort);
 
+    /* The keepalive supervisor. Pings on the control channel and lets
+     * send_request's ordinary failure path notice a dead link. */
+    void keepalive_main();
+    void start_keepalive();
+    void stop_keepalive();
+
     /* Reads one '\n'-terminated line from `sock`, using `leftover` to carry
      * bytes read past the newline into the next call. False on a closed
      * connection or socket error. */
@@ -384,6 +412,10 @@ class NetworkRadio : public RadioDevice {
     std::atomic<unsigned> reconnects_{0};
     /* Guards against a reconnect's own requests triggering a reconnect. */
     bool reconnecting_{false};
+
+    int keepalive_interval_ms_{2000};
+    std::thread keepalive_thread_{};
+    std::atomic<bool> keepalive_stop_{false};
 
     DeviceCaps caps_{};
     std::string last_error_{};

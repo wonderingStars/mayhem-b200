@@ -977,6 +977,7 @@ bool NetworkRadio::open(const std::string& args) {
     link_state_.store(LinkState::Connected);
     reconnects_.store(0);
     open_.store(true);
+    start_keepalive();
     return true;
 }
 
@@ -1037,6 +1038,10 @@ bool NetworkRadio::establish(const std::string& host, uint16_t port, const std::
 
 void NetworkRadio::close() {
     stop_rx();
+    /* Both joins happen BEFORE the lock is taken: each of those threads takes
+     * config_mutex_ itself, so closing under the lock and joining after it
+     * would deadlock. */
+    stop_keepalive();
 
     std::lock_guard<std::mutex> g{config_mutex_};
     if (control_) {
@@ -1073,6 +1078,37 @@ bool NetworkRadio::read_line(net::Socket& sock, std::string& leftover, std::stri
         if (n == net::Socket::kTimeout) continue;
         if (n == net::Socket::kClosed || n == net::Socket::kError) return false;
         leftover.append(buf, static_cast<size_t>(n));
+    }
+}
+
+void NetworkRadio::start_keepalive() {
+    stop_keepalive();
+    if (keepalive_interval_ms_ <= 0) return;
+    keepalive_stop_.store(false);
+    keepalive_thread_ = std::thread(&NetworkRadio::keepalive_main, this);
+}
+
+void NetworkRadio::stop_keepalive() {
+    keepalive_stop_.store(true);
+    if (keepalive_thread_.joinable()) keepalive_thread_.join();
+}
+
+void NetworkRadio::keepalive_main() {
+    while (!keepalive_stop_.load()) {
+        /* A real sleep, in slices. Not sleep_fn_ -- a test that stubs the
+         * backoff to a no-op would spin this thread at full tilt. */
+        for (int left = keepalive_interval_ms_; left > 0 && !keepalive_stop_.load(); left -= 25) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(left < 25 ? left : 25));
+        }
+        if (keepalive_stop_.load()) return;
+
+        /* Deliberately not gated on open_: after the ladder gives up, this is
+         * the only thing still looking, and a server that comes back two
+         * minutes later should be picked up without restarting the app. */
+        std::lock_guard<std::mutex> g{config_mutex_};
+        net::JsonValue result;
+        std::string err;
+        send_request("ping", "", result, err); /* the failure path reconnects */
     }
 }
 

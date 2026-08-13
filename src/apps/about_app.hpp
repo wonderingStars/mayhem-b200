@@ -39,8 +39,11 @@ namespace app {
  * session. The control link and the IQ stream both re-establish themselves
  * with backed-off retries, the session's tuning is replayed onto the new
  * connection, and GET /api/status carries a "link" field so a link that is
- * coming back is distinguishable from one that has given up. */
-constexpr const char* kVersion = "0.11.0";
+ * coming back is distinguishable from one that has given up.
+ * 0.11.1: a keepalive ping, so an IDLE client notices a dead link at all.
+ * Verified against a live sdrlink server and a B200: without it, killing the
+ * server left the client reporting "connected" indefinitely. */
+constexpr const char* kVersion = "0.11.1";
 
 class AboutView : public ui::View {
    public:
