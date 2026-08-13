@@ -488,23 +488,55 @@ void FpvDetectView::on_frame_sync() {
     ui::View::on_frame_sync();
 
     frame_counter_++;
-    scanner_.on_timer();
 
+    /* The settle window has to hold off the SCANNER'S CLOCK, not just the
+     * reading.
+     *
+     * on_timer() steps the scan every kScanDwellFrames + 1 = 2 frames and every
+     * step retunes, which asks for 3 settle frames. Decrementing the window
+     * after letting the dwell tick meant the next retune always arrived first:
+     * settle_frames_ ran 2, 1, 2, 1, ... and never reached zero, so
+     * on_statistics() below was never called ONCE. The detector took no
+     * measurement, never left Scanning, and stepped a channel every 2 frames
+     * for as long as the app was open -- ~31 hardware retunes a second, on the
+     * UI thread, none of which fed a reading. That is pure cost: a UHD
+     * set_rx_freq interrupts the RX stream (which is the reason this window
+     * exists at all), so the radio spent its time retuning instead of
+     * delivering samples.
+     *
+     * Holding the scanner's clock as well makes the cycle one step frame, three
+     * settle frames and one measurement frame: 12.5 retunes a second, each of
+     * them followed by exactly one reading of the channel it tuned to. */
     if (settle_frames_ > 0) {
         settle_frames_--;
         return;
     }
 
+    scanner_.on_timer();
+
+    /* on_timer() may have stepped the scan, and a step retunes; the level for
+     * the channel it just left is not the level of the one it moved to. */
+    if (settle_frames_ > 0) return;
+
     /* POWER READING — the honest note.
      *
      * Upstream reads ChannelStatistics.max_db, the M4's peak of the decimated
-     * channel over one baseband block. ReceiverModel exposes channel_level_db()
-     * instead, a smoothed mean of the channel after the channel filter. It is
-     * the closest equivalent the host has, and the detector's logic is
-     * unchanged by the substitution, but the absolute numbers differ from
-     * upstream's, so the default -38 dB threshold is a starting point rather
-     * than a calibrated value. */
-    const float db = receiver_.channel_level_db();
+     * channel over one baseband block. The host equivalent is rf_level_db(),
+     * the RMS the radio's receive thread takes over each block it pulls off the
+     * wire. This app captures exactly the channel it is measuring -- 750 kHz at
+     * the tuned frequency, no demodulator -- so that RMS *is* the power in the
+     * channel, and it is live in every mode.
+     *
+     * It is deliberately not channel_level_db(): that one is computed after the
+     * channel filter, and the DSP thread returns before computing it in
+     * SpectrumAnalysis mode, which is the mode on_show() selects. Reading it
+     * here returned a frozen number -- the value some earlier app's demodulator
+     * left behind, or the -140 initialiser -- for the whole life of the app.
+     *
+     * Being a mean rather than upstream's peak, the absolute numbers still
+     * differ from upstream's, so the default -38 dB threshold is a starting
+     * point rather than a calibrated value. */
+    const float db = receiver_.rf_level_db();
     const int16_t max_db = static_cast<int16_t>(
         fpv::clamp_value(static_cast<int32_t>(std::lround(db)), -120, 20));
 
