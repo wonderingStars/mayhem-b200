@@ -184,7 +184,7 @@ PanelData ais_panel(ui::View& view) {
     return panel;
 }
 
-const ProviderRegistrar reg_ais{"ais", ais_panel};
+const ProviderRegistrar reg_ais{"ais", PanelKind::GeoTable, ais_panel};
 
 }  // namespace
 }  // namespace remote

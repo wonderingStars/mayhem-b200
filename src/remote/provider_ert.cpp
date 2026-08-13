@@ -137,7 +137,7 @@ PanelData ert_panel(ui::View& view) {
     return panel;
 }
 
-const ProviderRegistrar reg_ert{"ert", ert_panel};
+const ProviderRegistrar reg_ert{"ert", PanelKind::Table, ert_panel};
 
 }  // namespace
 }  // namespace remote

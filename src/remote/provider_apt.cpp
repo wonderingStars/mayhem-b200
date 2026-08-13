@@ -146,7 +146,7 @@ PanelData apt_panel(ui::View& view) {
     return panel;
 }
 
-const ProviderRegistrar reg_noaaapt_rx{"noaaapt_rx", apt_panel};
+const ProviderRegistrar reg_noaaapt_rx{"noaaapt_rx", PanelKind::Image, apt_panel};
 
 }  // namespace
 }  // namespace remote

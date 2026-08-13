@@ -131,7 +131,7 @@ PanelData search_panel(ui::View& view) {
 /* The id src/apps/ui_search.cpp registers with app::Registrar. A wrong id here
  * registers a provider that never fires and leaves the portal showing the
  * placeholder card, which is why a test drives this end to end. */
-const ProviderRegistrar reg_search{"search", search_panel};
+const ProviderRegistrar reg_search{"search", PanelKind::Table, search_panel};
 
 }  // namespace
 }  // namespace remote

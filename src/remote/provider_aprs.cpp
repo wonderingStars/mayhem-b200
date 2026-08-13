@@ -181,7 +181,7 @@ PanelData aprs_panel(ui::View& view) {
     return panel;
 }
 
-const ProviderRegistrar reg_aprs_rx{"aprsrx", aprs_panel};
+const ProviderRegistrar reg_aprs_rx{"aprsrx", PanelKind::GeoTable, aprs_panel};
 
 }  // namespace
 }  // namespace remote

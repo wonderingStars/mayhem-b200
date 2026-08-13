@@ -173,7 +173,7 @@ PanelData acars_panel(ui::View& view) {
     return panel;
 }
 
-const ProviderRegistrar reg_acars_rx{"acars_rx", acars_panel};
+const ProviderRegistrar reg_acars_rx{"acars_rx", PanelKind::Console, acars_panel};
 
 }  // namespace
 }  // namespace remote

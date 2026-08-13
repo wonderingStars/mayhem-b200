@@ -176,6 +176,18 @@ JsonValue to_json(const AppSummary& a) {
     v.set("category", JsonValue::string(a.category));
     v.set("hardware_limited", JsonValue::boolean(a.hardware_limited));
     v.set("icon", JsonValue::string(a.icon_name));
+    /* panel_kind is OMITTED, not emptied, when the app has no provider: the
+     * browser reads its absence as "unknown/none" and draws no badge, and an
+     * empty string would have to be special-cased on every hop (Go's
+     * omitempty would drop it again anyway, so a "" that meant something
+     * could not survive the re-encode).
+     *
+     * Screen is filtered here rather than at the registration site because
+     * this is the wire, and the rule is about the wire: every app can be
+     * mirrored as a framebuffer, so "screen" says nothing about whether an
+     * app has a native panel. Advertising it would badge the entire grid. */
+    if (a.panel_kind.has_value() && *a.panel_kind != PanelKind::Screen)
+        v.set("panel_kind", JsonValue::string(panel_kind_name(*a.panel_kind)));
     return v;
 }
 

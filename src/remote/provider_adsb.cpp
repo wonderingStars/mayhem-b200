@@ -152,7 +152,7 @@ PanelData adsb_panel(ui::View& view) {
     return panel;
 }
 
-const ProviderRegistrar reg_adsb{"adsbrx", adsb_panel};
+const ProviderRegistrar reg_adsb{"adsbrx", PanelKind::Adsb, adsb_panel};
 
 }  // namespace
 }  // namespace remote

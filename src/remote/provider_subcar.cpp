@@ -121,7 +121,7 @@ PanelData subcar_panel(ui::View& view) {
 /* The id is the one src/apps/ui_subcar.cpp registers with app::Registrar. Get
  * it wrong and the provider is never reached: the app keeps showing the portal's
  * placeholder card and nothing anywhere reports an error. */
-const ProviderRegistrar reg_subcar{"subcarrx", subcar_panel};
+const ProviderRegistrar reg_subcar{"subcarrx", PanelKind::Table, subcar_panel};
 
 }  // namespace
 }  // namespace remote

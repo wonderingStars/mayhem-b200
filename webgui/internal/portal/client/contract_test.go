@@ -35,6 +35,14 @@ import (
 //	mayhem-b200.exe --portal=8090
 //	curl -s http://127.0.0.1:8090/api/apps > testdata/cpp_apps.json      (etc.)
 //
+// cpp_apps.json was re-captured at 0.11.3 when GET /api/apps grew panel_kind.
+// That one endpoint reads app::AppRegistry and nothing else, so it needs no
+// radio: the capture ran against a backend pointed at an unreachable sdrlink
+// address (--driver=sdrlink --args=127.0.0.1:9), which opens no device at
+// all, and every pre-existing field in the file is byte-identical to the
+// 0.9.0 capture. The other three fixtures still need an app open on real
+// hardware and were left alone.
+//
 // If a change to the C++ side makes one of these fail, that is the test doing
 // its job: fix the mismatch, then re-capture. Do NOT edit the fixture to match
 // a new C++ shape without also confirming the browser still renders — the
@@ -235,3 +243,159 @@ func TestContract_CanTransmitSurvivesTheRoundTrip(t *testing.T) {
 }
 
 func boolPtr(b bool) *bool { return &b }
+
+// GET /api/apps carries panel_kind per app, which is what lets the browser's
+// grid badge the tiles that have a real native view (app.js's
+// nativePanelKindFor). Before it existed a panel kind was published only for
+// the ONE app that happened to be open, so the badge could not be drawn
+// truthfully for anything else and was not drawn at all.
+//
+// The rules below are pinned against the raw JSON as well as the struct,
+// because the struct alone cannot tell "the backend omitted it" from "the Go
+// type dropped it" — the failure this whole file exists for.
+
+func rawApps(t *testing.T) []map[string]json.RawMessage {
+	t.Helper()
+	var raw struct {
+		Apps []map[string]json.RawMessage `json:"apps"`
+	}
+	loadFixture(t, "cpp_apps.json", &raw)
+	if len(raw.Apps) == 0 {
+		t.Fatal("no apps in the fixture")
+	}
+	return raw.Apps
+}
+
+func findRawApp(t *testing.T, apps []map[string]json.RawMessage, id string) map[string]json.RawMessage {
+	t.Helper()
+	for _, a := range apps {
+		var got string
+		if err := json.Unmarshal(a["id"], &got); err != nil {
+			continue
+		}
+		if got == id {
+			return a
+		}
+	}
+	t.Fatalf("app %q not present in the real app list", id)
+	return nil
+}
+
+func TestContract_AppsCarryPanelKindForAppsThatHaveAProvider(t *testing.T) {
+	var resp AppsResponse
+	loadFixture(t, "cpp_apps.json", &resp)
+
+	// One app per distinct kind a provider registers, so a single kind wired
+	// up wrongly cannot hide behind the others.
+	want := map[string]string{
+		"adsbrx":       "adsb",
+		"pocsag":       "console",
+		"ais":          "geotable",
+		"noaaapt_rx":   "image",
+		"wardrivemap":  "map",
+		"ert":          "table",
+		"audio":        "receiver",
+		"lookingglass": "spectrum",
+	}
+	seen := map[string]bool{}
+	for _, a := range resp.Apps {
+		if k, ok := want[a.ID]; ok {
+			seen[a.ID] = true
+			if a.PanelKind != k {
+				t.Errorf("app %q PanelKind = %q, want %q — check client.App has the "+
+					"panel_kind field and the backend still declares it", a.ID, a.PanelKind, k)
+			}
+		}
+	}
+	for id := range want {
+		if !seen[id] {
+			t.Errorf("app %q is not in the captured app list", id)
+		}
+	}
+}
+
+func TestContract_AppsOmitPanelKindEntirelyForAppsWithoutOne(t *testing.T) {
+	// Most apps have no panel provider. Absent has to stay absent: the badge
+	// is drawn from the key's presence, so an empty string would claim a
+	// native view that does not exist.
+	apps := rawApps(t)
+	for _, id := range []string{"fmradio", "afsk_rx"} {
+		a := findRawApp(t, apps, id)
+		if v, present := a["panel_kind"]; present {
+			t.Errorf("app %q carries panel_kind %s — apps with no provider must omit "+
+				"the key, not send an empty one", id, string(v))
+		}
+		// The rest of the entry is untouched, so this is a real entry and not
+		// an artifact of the lookup.
+		if _, present := a["hardware_limited"]; !present {
+			t.Errorf("app %q is missing hardware_limited — fixture looks wrong", id)
+		}
+	}
+
+	// And at least one app in the list really is keyless, so the case above
+	// cannot quietly stop being exercised if those two ids ever gain
+	// providers.
+	keyless := 0
+	for _, a := range apps {
+		if _, present := a["panel_kind"]; !present {
+			keyless++
+		}
+	}
+	if keyless == 0 {
+		t.Error("every app carries panel_kind — the omit path is not being exercised at all")
+	}
+}
+
+func TestContract_AppsNeverAdvertiseTheScreenPanelKind(t *testing.T) {
+	// "screen" is the framebuffer mirror EVERY app has. It is a legitimate
+	// answer on GET /api/panel and GET /api/apps/current, and never one here:
+	// publishing it would badge all 104 tiles as having a native view.
+	var resp AppsResponse
+	loadFixture(t, "cpp_apps.json", &resp)
+	for _, a := range resp.Apps {
+		if a.PanelKind == "screen" {
+			t.Errorf("app %q advertises panel_kind \"screen\"", a.ID)
+		}
+	}
+}
+
+func TestContract_AppPanelKindSurvivesTheReEncode(t *testing.T) {
+	// The portal server re-encodes []client.App on the way to the browser
+	// (internal/portal/server's appsResponse), so decoding it is only half
+	// the hop — a field this struct lacks is dropped on the way OUT even
+	// when the backend sent it. That is exactly how can_go_back, version and
+	// CurrentApp.panel_kind each went missing.
+	var resp AppsResponse
+	loadFixture(t, "cpp_apps.json", &resp)
+
+	out, err := json.Marshal(resp)
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	var back struct {
+		Apps []map[string]json.RawMessage `json:"apps"`
+	}
+	if err := json.Unmarshal(out, &back); err != nil {
+		t.Fatalf("re-decode: %v", err)
+	}
+	if len(back.Apps) != len(resp.Apps) {
+		t.Fatalf("re-encoded %d apps, want %d", len(back.Apps), len(resp.Apps))
+	}
+
+	adsb := findRawApp(t, back.Apps, "adsbrx")
+	var kind string
+	if err := json.Unmarshal(adsb["panel_kind"], &kind); err != nil {
+		t.Fatalf("adsbrx lost panel_kind through the re-encode: %v", err)
+	}
+	if kind != "adsb" {
+		t.Errorf("after re-encode adsbrx panel_kind = %q, want %q", kind, "adsb")
+	}
+
+	// omitempty in the other direction: an app that arrived without the key
+	// must not leave with an empty one.
+	fm := findRawApp(t, back.Apps, "fmradio")
+	if v, present := fm["panel_kind"]; present {
+		t.Errorf("after re-encode fmradio carries panel_kind %s — absent must stay absent",
+			string(v))
+	}
+}
