@@ -274,12 +274,53 @@ double UsrpRadio::set_rx_rate(double rate_hz) {
         return rx_rate_;
     }
 
+    /* A B200 has no fixed master clock: UHD picks one to suit the requested
+     * sample rate and re-tunes the FPGA's clocking to match. That
+     * re-initialises the radio underneath any rx_streamer already handed out,
+     * and the stale streamer then returns nothing at all -- no error, no
+     * samples, just a receiver that has quietly gone deaf.
+     *
+     * Observed as Search failing to receive whenever it was opened directly
+     * from another app rather than from the menu (2026-08-13): the departing
+     * app's destructor restored its own rate and the arriving app then set
+     * 2.5 MHz, two master-clock moves in quick succession with the stream
+     * live, and the second one killed it. Launching the same app from the
+     * menu is a single move made before streaming starts, which is exactly
+     * why it worked and made this look app-specific.
+     *
+     * So the streamer is rebuilt whenever the clock actually moved. The
+     * comparison is on the master clock rather than on the sample rate: most
+     * rate changes are just a decimation change and keep the same clock, and
+     * rebuilding for those would drop samples for no reason. */
+    const double clock_before = impl_->usrp->get_master_clock_rate(0);
+
     try {
         impl_->usrp->set_rx_rate(caps_.rx_rate.clamp(rate_hz), kChannel);
         rx_rate_ = impl_->usrp->get_rx_rate(kChannel);
     } catch (const std::exception& e) {
         last_error_ = e.what();
+        return rx_rate_;
     }
+
+    const double clock_after = impl_->usrp->get_master_clock_rate(0);
+    if (clock_after != clock_before && rx_running_.load() && impl_->rx_stream) {
+        try {
+            uhd::stream_args_t args("fc32", "sc16");
+            args.channels = {kChannel};
+            impl_->rx_stream = impl_->usrp->get_rx_stream(args);
+            caps_.master_clock_rate = clock_after;
+            /* The rx thread caches the streamer for the life of one recv loop,
+             * so replacing the pointer alone would leave it reading the dead
+             * one forever. Bumping the generation is what tells it to pick the
+             * new streamer up; it is an atomic rather than a lock so the recv
+             * loop pays one relaxed load per block instead of contending with
+             * every setter. */
+            rx_stream_generation_.fetch_add(1, std::memory_order_release);
+        } catch (const std::exception& e) {
+            last_error_ = std::string{"rx streamer rebuild after a master-clock change failed: "} + e.what();
+        }
+    }
+
     return rx_rate_;
 }
 
@@ -543,8 +584,8 @@ void UsrpRadio::rx_thread_main() {
         return;
     }
 
-    const size_t max_samps = stream->get_max_num_samps();
-    std::vector<cfloat> buffer(max_samps);
+    uint32_t stream_generation = rx_stream_generation_.load(std::memory_order_acquire);
+    std::vector<cfloat> buffer(stream->get_max_num_samps());
     uhd::rx_metadata_t md;
 
     try {
@@ -558,6 +599,29 @@ void UsrpRadio::rx_thread_main() {
     }
 
     while (!rx_stop_.load()) {
+        /* set_rx_rate rebuilds the streamer when UHD moves the B200's master
+         * clock; without picking the new one up here, this loop would keep
+         * recv()ing on a streamer whose hardware was re-initialised out from
+         * under it and simply never return another sample. */
+        const uint32_t generation_now = rx_stream_generation_.load(std::memory_order_acquire);
+        if (generation_now != stream_generation) {
+            stream_generation = generation_now;
+            {
+                std::lock_guard<std::mutex> g{config_mutex_};
+                stream = impl_->rx_stream;
+            }
+            if (!stream) break;
+            buffer.assign(stream->get_max_num_samps(), cfloat{});
+            try {
+                uhd::stream_cmd_t cmd(uhd::stream_cmd_t::STREAM_MODE_START_CONTINUOUS);
+                cmd.stream_now = true;
+                stream->issue_stream_cmd(cmd);
+            } catch (const std::exception&) {
+                stats_.errors++;
+                break;
+            }
+        }
+
         size_t received = 0;
         try {
             received = stream->recv(buffer.data(), buffer.size(), md, kRecvTimeout);

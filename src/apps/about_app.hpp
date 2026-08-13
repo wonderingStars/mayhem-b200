@@ -46,8 +46,13 @@ namespace app {
  * 0.11.2: GET /api/status carries can_transmit, from the attached radio's
  * DeviceCaps.has_tx, so the portal can lock the transmit apps on a
  * receive-only SDR instead of offering ~28 apps that cannot work. Sent only
- * while a device is open: with nothing attached there is no honest answer. */
-constexpr const char* kVersion = "0.11.2";
+ * while a device is open: with nothing attached there is no honest answer.
+ * 0.11.3: rebuild the RX streamer when UHD moves the B200's master clock.
+ * Changing the sample rate while streaming re-initialises the radio under the
+ * streamer already handed out, and the receiver then goes silently deaf --
+ * which is why an app opened directly from another app could fail to
+ * receive. */
+constexpr const char* kVersion = "0.11.3";
 
 class AboutView : public ui::View {
    public:

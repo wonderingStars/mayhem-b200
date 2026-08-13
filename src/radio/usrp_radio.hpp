@@ -165,6 +165,11 @@ class UsrpRadio : public RadioDevice {
 
     std::atomic<bool> open_{false};
     std::atomic<bool> rx_running_{false};
+
+    /* Bumped whenever set_rx_rate has to hand out a new rx_streamer because
+     * UHD moved the master clock. The RX thread caches the streamer across
+     * its recv loop, so this is how it learns the cached one is dead. */
+    std::atomic<uint32_t> rx_stream_generation_{0};
     std::atomic<bool> tx_running_{false};
     std::atomic<bool> rx_stop_{false};
     std::atomic<bool> tx_stop_{false};
