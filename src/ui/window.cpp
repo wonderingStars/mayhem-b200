@@ -27,6 +27,7 @@
 #endif
 #include <windows.h>
 #include <windowsx.h>
+#include <shellapi.h>
 
 #include <algorithm>
 #include <vector>
@@ -36,6 +37,22 @@ namespace host {
 namespace {
 
 constexpr wchar_t kClassName[] = L"MayhemB200Window";
+
+/* Notification-area (tray) plumbing. The tray icon is what makes a hidden
+ * window survivable: it is the "this is running" affordance and, more
+ * importantly, the graceful Quit that would otherwise only exist on the
+ * window's title bar. Quit pushes the very same Event::Type::Quit that
+ * WM_CLOSE does, so it lands in main()'s normal teardown — it is not a kill. */
+constexpr UINT kTrayCallbackMsg = WM_APP + 1;
+constexpr UINT kTrayIconId = 1;
+constexpr UINT kMenuShow = 0xE001;
+constexpr UINT kMenuHide = 0xE002;
+constexpr UINT kMenuQuit = 0xE003;
+
+/* Resource id of the app icon compiled in from mayhem-b200.rc (installer
+ * artwork). Falls back to the stock application icon if the resource is
+ * missing, so a build without the .rc still gets a usable tray entry. */
+constexpr WORD kAppIconResourceId = 101;
 
 std::wstring widen(const std::string& s) {
     if (s.empty()) return {};
@@ -59,6 +76,7 @@ struct Window::Impl {
 
     bool touch_down{false};
     Window* owner{nullptr};
+    bool tray_added{false};
 
     void push(const Event& e) {
         std::lock_guard<std::mutex> g{queue_lock};
@@ -140,6 +158,57 @@ LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
             e.type = Event::Type::Quit;
             impl->push(e);
             return 0;
+        }
+
+        /* Tray icon: left double-click restores the window, right-click (or a
+         * single left click) opens the menu. */
+        case kTrayCallbackMsg: {
+            const UINT ev = LOWORD(lparam);
+            if (ev == WM_LBUTTONDBLCLK) {
+                if (impl->owner) impl->owner->set_visible(true);
+                return 0;
+            }
+            if (ev == WM_RBUTTONUP || ev == WM_LBUTTONUP) {
+                const bool shown = impl->owner ? impl->owner->visible() : true;
+                HMENU menu = CreatePopupMenu();
+                if (menu == nullptr) return 0;
+                AppendMenuW(menu, MF_STRING, shown ? kMenuHide : kMenuShow,
+                            shown ? L"Hide window" : L"Show window");
+                AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+                AppendMenuW(menu, MF_STRING, kMenuQuit, L"Quit");
+
+                POINT pt;
+                GetCursorPos(&pt);
+                /* Required so the menu closes when the user clicks elsewhere —
+                 * a documented Win32 quirk for tray menus. */
+                SetForegroundWindow(hwnd);
+                TrackPopupMenu(menu, TPM_RIGHTBUTTON, pt.x, pt.y, 0, hwnd, nullptr);
+                PostMessageW(hwnd, WM_NULL, 0, 0);
+                DestroyMenu(menu);
+                return 0;
+            }
+            return 0;
+        }
+
+        case WM_COMMAND: {
+            switch (LOWORD(wparam)) {
+                case kMenuShow:
+                    if (impl->owner) impl->owner->set_visible(true);
+                    return 0;
+                case kMenuHide:
+                    if (impl->owner) impl->owner->set_visible(false);
+                    return 0;
+                case kMenuQuit: {
+                    /* Same event WM_CLOSE produces: the graceful teardown. */
+                    Event e;
+                    e.type = Event::Type::Quit;
+                    impl->push(e);
+                    return 0;
+                }
+                default:
+                    break;
+            }
+            break;
         }
 
         case WM_KEYDOWN:
@@ -247,7 +316,7 @@ Window::~Window() {
     destroy();
 }
 
-bool Window::create(const std::string& title, int scale) {
+bool Window::create(const std::string& title, int scale, bool hidden) {
     scale_ = std::clamp(scale, 1, 6);
     impl_ = new Impl();
     impl_->owner = this;
@@ -303,13 +372,58 @@ bool Window::create(const std::string& title, int scale) {
     impl_->pixels = static_cast<uint32_t*>(bits);
     SelectObject(impl_->mem_dc, impl_->dib);
 
-    ShowWindow(impl_->hwnd, SW_SHOW);
-    UpdateWindow(impl_->hwnd);
+    /* The tray icon is registered whether or not the window is showing: it is
+     * the graceful-quit affordance, and with --hidden (and the launcher hiding
+     * the console too) it is the ONLY one the user has. Failure is not fatal —
+     * a missing tray icon must not stop the radio from running. */
+    {
+        HICON icon = static_cast<HICON>(LoadImageW(inst, MAKEINTRESOURCEW(kAppIconResourceId),
+                                                   IMAGE_ICON, GetSystemMetrics(SM_CXSMICON),
+                                                   GetSystemMetrics(SM_CYSMICON), 0));
+        /* IDI_APPLICATION spelled out: the project does not define UNICODE, so
+         * the bare macro would expand to the ANSI form and not match LoadIconW. */
+        if (icon == nullptr) icon = LoadIconW(nullptr, MAKEINTRESOURCEW(32512));
+
+        NOTIFYICONDATAW nid{};
+        nid.cbSize = sizeof(nid);
+        nid.hWnd = impl_->hwnd;
+        nid.uID = kTrayIconId;
+        nid.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP;
+        nid.uCallbackMessage = kTrayCallbackMsg;
+        nid.hIcon = icon;
+        const std::wstring tip = widen(title);
+        wcsncpy_s(nid.szTip, tip.c_str(), _TRUNCATE);
+        impl_->tray_added = Shell_NotifyIconW(NIM_ADD, &nid) != FALSE;
+    }
+
+    visible_ = !hidden;
+    ShowWindow(impl_->hwnd, hidden ? SW_HIDE : SW_SHOW);
+    if (!hidden) UpdateWindow(impl_->hwnd);
     return true;
+}
+
+void Window::set_visible(bool visible) {
+    if (impl_ == nullptr || impl_->hwnd == nullptr) return;
+    visible_ = visible;
+    ShowWindow(impl_->hwnd, visible ? SW_SHOW : SW_HIDE);
+    if (visible) {
+        SetForegroundWindow(impl_->hwnd);
+        /* The framebuffer has not changed, so present() would skip the blit;
+         * force it or the restored window comes back blank. */
+        present(true);
+    }
 }
 
 void Window::destroy() {
     if (impl_ == nullptr) return;
+    if (impl_->tray_added && impl_->hwnd) {
+        NOTIFYICONDATAW nid{};
+        nid.cbSize = sizeof(nid);
+        nid.hWnd = impl_->hwnd;
+        nid.uID = kTrayIconId;
+        Shell_NotifyIconW(NIM_DELETE, &nid);
+        impl_->tray_added = false;
+    }
     if (impl_->mem_dc) DeleteDC(impl_->mem_dc);
     if (impl_->dib) DeleteObject(impl_->dib);
     if (impl_->hwnd) DestroyWindow(impl_->hwnd);
@@ -347,6 +461,12 @@ bool Window::pump() {
 
 void Window::present(bool force) {
     if (impl_ == nullptr || impl_->pixels == nullptr) return;
+
+    /* Nothing to blit to while hidden. The damage flag is deliberately left
+     * unconsumed so the first present() after set_visible(true) — which passes
+     * force anyway — repaints a complete frame. The portal is unaffected: it
+     * reads the display's separate non-destructive damage counter. */
+    if (!visible_ && !force) return;
 
     const bool damaged = display.take_damage();
     if (!damaged && !force) return;

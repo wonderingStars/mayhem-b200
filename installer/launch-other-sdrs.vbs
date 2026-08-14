@@ -24,8 +24,10 @@ End If
 
 ' 2) The app, pointed at the local server. Its sdrlink client auto-reconnects,
 '    so it is fine if the server is still starting.
+' Style 0 hides the console; --hidden hides the GUI window. The tray icon is
+' then the local control (Show window / Quit).
 If Not IsRunning("mayhem-b200.exe") Then
-    sh.Run """" & appDir & "\mayhem-b200.exe"" --driver=sdrlink --args=127.0.0.1:5960 --portal=8090", 1, False
+    sh.Run """" & appDir & "\mayhem-b200.exe"" --driver=sdrlink --args=127.0.0.1:5960 --portal=8090 --hidden", 0, False
 End If
 
 ' 3) The web portal.

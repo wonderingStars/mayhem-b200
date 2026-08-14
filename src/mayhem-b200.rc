@@ -1,0 +1,12 @@
+/*
+ * mayhem-b200 — Win32 resources.
+ *
+ * Compiles the application icon into the executable. That gives the exe a
+ * proper icon in Explorer, the taskbar and any shortcut that points straight
+ * at it, and it is the icon host::Window loads for the notification-area
+ * (tray) entry. Id 101 must match kAppIconResourceId in src/ui/window.cpp.
+ *
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ */
+
+101 ICON "../installer/assets/mayhem-b200.ico"

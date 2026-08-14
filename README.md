@@ -258,8 +258,32 @@ cd webgui && go build -o ../build/mayhem-portal.exe ./cmd/mayhem-portal
 | `--args=<backend args>` | For `uhd`, a device address such as `type=b200,serial=31C9297`. For `sdrlink`, `host[:port]`, optionally `/` and remote device args |
 | `--scale=<1..6>` | Window magnification (default 2) |
 | `--portal[=port]` | Serve the JSON/screen API the web portal talks to (default 8090) |
+| `--hidden` | Run with no app window — the browser portal is the whole UI. Implies `--log-file`. See below |
+| `--log-file[=path]` | Send stdout/stderr to a log file (default `<data dir>/mayhem-b200.log`) |
 | `--list` | List attached USRPs and exit (uhd only) |
 | `--help` | Usage |
+
+### Running it as a background appliance
+
+The installed shortcuts start everything in the background: no consoles, and
+no app window — the browser tab at http://127.0.0.1:8081 is the interface.
+That is `--hidden` plus a hidden console for each process.
+
+Two things make that safe rather than merely invisible:
+
+- **A tray icon**, with **Show window** and **Quit**. With the window and the
+  console both hidden it is the only local control there is, and its Quit runs
+  the ordinary shutdown — not a kill.
+- **A real shutdown path.** Ctrl+C, closing the console, and Windows logging
+  off or shutting down now all run the same teardown that closing the window
+  always did: the transmit burst is ended, the streams are stopped, TX gain is
+  put back to minimum and the device is released. Previously every one of those
+  was a hard kill that skipped all of it, which is what left a B200 claimed and
+  the next launch reporting "no devices found" for ten seconds or so.
+
+A hidden window receives no keyboard or mouse input, so in that mode local
+control is the tray icon and everything else happens in the browser. Run
+`mayhem-b200.exe` by hand (no `--hidden`) whenever you want the window back.
 
 To drive a radio that is not a USRP — RTL-SDR, HackRF, Airspy, LimeSDR,
 PlutoSDR — run an sdrlink server beside it and point this at it:

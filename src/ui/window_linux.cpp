@@ -193,7 +193,7 @@ static bool alloc_image(Window::Impl* impl, int scale) {
     return true;
 }
 
-bool Window::create(const std::string& title, int scale) {
+bool Window::create(const std::string& title, int scale, bool hidden) {
     scale_ = std::clamp(scale, 1, 6);
     impl_ = new Impl();
     impl_->owner = this;
@@ -262,9 +262,26 @@ bool Window::create(const std::string& title, int scale) {
 
     impl_->composed.assign(static_cast<size_t>(ui::screen_width) * ui::screen_height, 0);
 
-    XMapWindow(impl_->dpy, impl_->win);
+    /* Mirrors the Win32 --hidden path: the window exists (so the event loop,
+     * the image and the framebuffer all behave normally and the portal keeps
+     * getting frames) but is never mapped, so nothing appears on screen. */
+    visible_ = !hidden;
+    if (!hidden) XMapWindow(impl_->dpy, impl_->win);
     XFlush(impl_->dpy);
     return true;
+}
+
+void Window::set_visible(bool visible) {
+    if (impl_ == nullptr || impl_->dpy == nullptr) return;
+    visible_ = visible;
+    if (visible) {
+        XMapWindow(impl_->dpy, impl_->win);
+        XFlush(impl_->dpy);
+        present(true);
+    } else {
+        XUnmapWindow(impl_->dpy, impl_->win);
+        XFlush(impl_->dpy);
+    }
 }
 
 void Window::destroy() {
@@ -410,6 +427,10 @@ bool Window::pump() {
 
 void Window::present(bool force) {
     if (impl_ == nullptr || impl_->image == nullptr) return;
+
+    /* Unmapped: nothing to draw to. Damage is left unconsumed so the forced
+     * present() in set_visible(true) repaints a whole frame. */
+    if (!visible_ && !force) return;
 
     const bool damaged = display.take_damage();
     if (!damaged && !force && !impl_->needs_repaint) return;

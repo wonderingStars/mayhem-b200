@@ -6,6 +6,7 @@
  */
 
 #include "apps/about_app.hpp"
+#include "core/quit.hpp"
 #include "core/telemetry.hpp"
 #include "apps/app_context.hpp"
 #include "apps/event_dispatch.hpp"
@@ -38,6 +39,10 @@
 
 #if defined(_WIN32)
 #include <windows.h>  /* GetModuleFileNameW for the bundled-images lookup */
+#include <io.h>       /* _dup2/_fileno, for the log-file redirect */
+#include <share.h>    /* _SH_DENYWR: keep the log readable while running */
+#else
+#include <unistd.h>   /* dup2 */
 #endif
 
 namespace {
@@ -86,6 +91,18 @@ struct Options {
      * it. Inert anyway unless the build set core::telemetry::kTelemetryEndpoint.
      * See src/core/telemetry.hpp. */
     bool telemetry_enabled{true};
+
+    /* --hidden: create the window but never show it. The portal composites
+     * from the software framebuffer, not from this window, so the browser UI
+     * is unaffected — but a hidden window takes no keyboard or mouse input,
+     * so the tray icon is then the only local control. */
+    bool hidden{false};
+
+    /* --log-file[=path]: send stdout/stderr to a file. Implied by --hidden,
+     * because a hidden run is normally a console-hidden run too and every
+     * diagnostic below would otherwise go nowhere. */
+    bool log_to_file{false};
+    std::string log_path{};
 };
 
 Options parse_args(int argc, char** argv) {
@@ -109,6 +126,14 @@ Options parse_args(int argc, char** argv) {
             o.portal_port = static_cast<uint16_t>(std::atoi(arg.c_str() + 9));
         } else if (arg == "--no-telemetry") {
             o.telemetry_enabled = false;
+        } else if (arg == "--hidden") {
+            o.hidden = true;
+            o.log_to_file = true;  /* nothing would be left to read the console */
+        } else if (arg == "--log-file") {
+            o.log_to_file = true;
+        } else if (arg.rfind("--log-file=", 0) == 0) {
+            o.log_to_file = true;
+            o.log_path = arg.substr(11);
         }
     }
     return o;
@@ -132,6 +157,11 @@ void print_help() {
         "                          who can reach the port can operate this radio,\n"
         "                          transmit apps included -- including a web page you\n"
         "                          merely visit, which can post to 127.0.0.1.\n"
+        "  --hidden                Do not show the app window; drive it from the\n"
+        "                          browser portal only. Implies --log-file. The\n"
+        "                          tray icon then shows the window again or quits.\n"
+        "  --log-file[=path]       Send stdout/stderr to a log file instead of the\n"
+        "                          console (default <data dir>/mayhem-b200.log).\n"
         "  --help                  This text\n"
         "\n"
         "Controls: arrows navigate and tune, Enter selects, Esc goes back,\n"
@@ -166,6 +196,67 @@ void use_bundled_uhd_images() {
 void use_bundled_uhd_images() {}
 #endif
 
+/* Redirects stdout/stderr into a log file. Done by reopening the streams
+ * rather than by touching the ~nine printf sites below, so every diagnostic —
+ * including any a future change adds — follows automatically. */
+void redirect_output_to_log(const std::string& explicit_path) {
+    std::string path = explicit_path;
+    if (path.empty()) {
+        core::ensure_directory(core::data_directory());
+        path = core::data_directory() + "/mayhem-b200.log";
+    }
+    /* ONE file, with both streams duplicated onto it — not two freopen calls.
+     * Two matter here, and the first version got both wrong:
+     *   - reopening the same path twice fails the second time, because the CRT
+     *     opens it for exclusive access; stderr was then left broken and every
+     *     error message (including "no device opened") vanished silently, and
+     *   - the log has to stay READABLE while the program runs, since with the
+     *     console hidden it is the only diagnostic there is. */
+#if defined(_WIN32)
+    std::FILE* f = _fsopen(path.c_str(), "w", _SH_DENYWR);  /* readers allowed */
+    if (f == nullptr) return;
+    _dup2(_fileno(f), _fileno(stdout));
+    _dup2(_fileno(f), _fileno(stderr));
+#else
+    std::FILE* f = std::fopen(path.c_str(), "w");
+    if (f == nullptr) return;
+    dup2(fileno(f), fileno(stdout));
+    dup2(fileno(f), fileno(stderr));
+#endif
+    /* Unbuffered: a log that only materialises at exit is useless for
+     * diagnosing a run that is still going, or one that died hard. */
+    std::setvbuf(stdout, nullptr, _IONBF, 0);
+    std::setvbuf(stderr, nullptr, _IONBF, 0);
+    std::printf("mayhem-b200 %s log\n", app::kVersion);
+}
+
+#if defined(_WIN32)
+/* Ctrl+C, closing the console window, logging off, shutting down. Before this
+ * existed every one of those was a hard kill: the teardown in main() never ran,
+ * so a transmit app died mid-burst with no end-of-burst, the streams were never
+ * stopped and the B200 stayed claimed until Windows reaped the endpoint.
+ *
+ * The handler only *asks* for a quit — the actual teardown stays on the main
+ * thread where it belongs — and then blocks until that teardown reports done,
+ * because returning would let Windows terminate the process immediately.
+ * Windows allows roughly 5 s here, and the teardown is bounded well under that
+ * (the RX drain caps at 200 ms and the TX send timeout at 0.5 s). */
+BOOL WINAPI console_ctrl_handler(DWORD type) {
+    switch (type) {
+        case CTRL_C_EVENT:
+        case CTRL_BREAK_EVENT:
+        case CTRL_CLOSE_EVENT:
+        case CTRL_LOGOFF_EVENT:
+        case CTRL_SHUTDOWN_EVENT:
+            core::request_quit();
+            core::wait_for_shutdown_complete(4000);
+            return TRUE;
+        default:
+            return FALSE;
+    }
+}
+#endif
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -189,6 +280,16 @@ int main(int argc, char** argv) {
         return 0;
     }
 
+    /* Both are past the --help/--list early returns on purpose: those two are
+     * console-facing and must keep printing to the console. */
+    if (options.log_to_file) redirect_output_to_log(options.log_path);
+
+#if defined(_WIN32)
+    /* Registered before the radio is opened, so even a Ctrl+C during a slow
+     * B200 initialisation unwinds through the normal teardown. */
+    SetConsoleCtrlHandler(console_ctrl_handler, TRUE);
+#endif
+
     /* Make sure the data folders exist before any app tries to write there. */
     core::ensure_directory(core::captures_directory());
     core::ensure_directory(core::freqman_directory());
@@ -196,7 +297,7 @@ int main(int argc, char** argv) {
     host::display.init();
 
     host::Window window;
-    if (!window.create(std::string{"Mayhem B200 "} + app::kVersion, options.scale)) {
+    if (!window.create(std::string{"Mayhem B200 "} + app::kVersion, options.scale, options.hidden)) {
         std::fprintf(stderr, "failed to create window\n");
         return 1;
     }
@@ -285,7 +386,11 @@ int main(int argc, char** argv) {
     bool running = true;
     auto next_frame = std::chrono::steady_clock::now();
 
-    while (running && window.pump()) {
+    /* core::quit_requested() is the second way out, alongside the Quit event the
+     * window (or the tray menu) queues: it is what the console control handler
+     * sets, and it is checked first so a Ctrl+C during a stalled frame still
+     * lands in the teardown below. */
+    while (running && !core::quit_requested() && window.pump()) {
         host::Event event;
         while (window.poll_event(event)) {
             if (!dispatcher.dispatch(event)) {
@@ -362,14 +467,30 @@ int main(int argc, char** argv) {
             next_frame = now;
     }
 
+    /* Teardown. Order matters: stop the things that touch the radio before the
+     * radio itself, and stop the portal first so no handler is still queueing
+     * work into an app that is being torn down. */
     portal_server.stop();
 
     receiver.stop();
     transmitter.stop();
+
+    /* Leave the transmit chain unambiguously idle. transmitter.stop() ends the
+     * burst, but nothing anywhere lowered the gain, so the last app's TX gain
+     * would survive into the next run — and if a future path ever keys the
+     * radio without a matching stop, it would key it at whatever level was left
+     * behind. Cheap insurance, and it costs one register write on the way out. */
+    if (radio.is_open()) radio.set_tx_gain(radio.caps().tx_gain.min);
+
     audio_in.stop();
     radio.close();
     audio_out.stop();
     window.destroy();
+
+    /* Releases the console control handler, which is blocked waiting for
+     * exactly this. Must be the last thing: after it returns, Windows is free
+     * to terminate the process. */
+    core::notify_shutdown_complete();
 
     return 0;
 }

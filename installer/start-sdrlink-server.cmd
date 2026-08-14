@@ -12,4 +12,7 @@ set "SOAPY_SDR_PLUGIN_PATH=%~dp0modules0.8"
 set "PATH=%~dp0;%PATH%"
 
 REM control 5960 (what the app connects to), stream 5961, server's own GUI on 8082.
-start "sdrlink-server" /min sdrlink-server.exe -worker "%~dp0sdrlink-worker.exe" -control-port 5960 -stream-port 5961 -http-port 8082
+REM Run INLINE, not via `start /min`: this .cmd is already launched hidden, so
+REM the server inherits that hidden console (and passes it to its worker child).
+REM `start` would instead create a brand-new, visible-but-minimised console.
+sdrlink-server.exe -worker "%~dp0sdrlink-worker.exe" -control-port 5960 -stream-port 5961 -http-port 8082

@@ -60,9 +60,21 @@ class Window {
     Window(const Window&) = delete;
     Window& operator=(const Window&) = delete;
 
-    /* Creates the window. `scale` is the integer pixel magnification. */
-    bool create(const std::string& title, int scale = 2);
+    /* Creates the window. `scale` is the integer pixel magnification.
+     *
+     * `hidden` creates it but never shows it: the message queue, the DIB and
+     * the framebuffer all still work, so the portal keeps getting frames (it
+     * composites from the software framebuffer, not from this window), but
+     * nothing appears on screen. Used by the launcher for browser-only
+     * operation. A hidden window receives no keyboard or mouse input — it
+     * cannot be focused — so local control is remote-only in that mode, and
+     * the tray icon becomes the only way to quit or bring the window back. */
+    bool create(const std::string& title, int scale = 2, bool hidden = false);
     void destroy();
+
+    /* Show or hide the window after creation (the tray menu drives this). */
+    void set_visible(bool visible);
+    bool visible() const { return visible_; }
 
     /* Pumps pending Win32 messages. Returns false once the window is closed. */
     bool pump();
@@ -89,6 +101,7 @@ class Window {
     Impl* impl_{nullptr};
     int scale_{2};
     bool closed_{false};
+    bool visible_{true};
 };
 
 }  // namespace host

@@ -134,7 +134,9 @@ if(WIN32)
     # gdi32/user32: the window and framebuffer blit. winmm: waveOut/waveIn audio.
     # ws2_32: Winsock, for NetworkRadio's sdrlink client (src/radio/network_radio.cpp).
     # winhttp: outbound HTTPS for the anonymous usage ping (src/core/telemetry.cpp).
-    target_link_libraries(mb200 PUBLIC gdi32 user32 winmm ws2_32 winhttp)
+    # shell32: Shell_NotifyIcon, the notification-area (tray) icon that carries
+    # the graceful Quit -- the only local control a --hidden run has.
+    target_link_libraries(mb200 PUBLIC gdi32 user32 winmm ws2_32 winhttp shell32)
 else()
     # The Linux equivalents of that list. X11: the window and framebuffer blit
     # (src/ui/window_linux.cpp). ALSA: audio in/out (src/audio/*_linux.cpp).
@@ -150,7 +152,14 @@ endif()
 # Application
 # ---------------------------------------------------------------------------
 
-add_executable(mayhem-b200 src/main.cpp)
+# The .rc compiles the application icon in: it gives the exe its own icon in
+# Explorer and the taskbar, and it is what the tray icon loads at runtime.
+# Windows-only -- MinGW/MSVC both handle .rc, but there is no equivalent on X11.
+if(WIN32)
+    add_executable(mayhem-b200 src/main.cpp src/mayhem-b200.rc)
+else()
+    add_executable(mayhem-b200 src/main.cpp)
+endif()
 target_link_libraries(mayhem-b200 PRIVATE mb200)
 
 # Copy uhd.dll next to the binary so the app runs from the build tree.

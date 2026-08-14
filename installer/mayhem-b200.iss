@@ -9,7 +9,7 @@
 ; SPDX-License-Identifier: GPL-2.0-or-later
 
 #define AppName "Mayhem B200"
-#define AppVersion "0.18.1"
+#define AppVersion "0.19.0"
 #define AppPublisher "mayhem-b200 contributors"
 #define AppURL "https://github.com/wonderingStars/mayhem-b200"
 #define AppExe "mayhem-b200.exe"

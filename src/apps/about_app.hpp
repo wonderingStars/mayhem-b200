@@ -149,7 +149,16 @@ namespace app {
  * to it (mayhem-b200-usage.bondvpn.workers.dev), so builds actually count.
  * End-to-end verified against the live Worker; README query syntax corrected
  * (count(DISTINCT index1), not uniq). */
-constexpr const char* kVersion = "0.18.1";
+/* 0.19.0: runs as a background appliance. A real shutdown path (core/quit.hpp)
+ * means Ctrl+C, closing the console and Windows logoff now run the same
+ * teardown the window's X always did — before, all of those were hard kills
+ * that skipped the transmit end-of-burst and left the B200 claimed. Teardown
+ * also idles TX gain explicitly. --hidden runs with no GUI window (the browser
+ * portal is the UI), --log-file keeps the diagnostics a hidden console would
+ * swallow, and a tray icon carries Show window / Quit — the local control a
+ * hidden window would otherwise have none of. The launchers start everything
+ * in the background. */
+constexpr const char* kVersion = "0.19.0";
 
 class AboutView : public ui::View {
    public:
