@@ -1,0 +1,4 @@
+# Transient installer build artifacts — never commit binaries or staged payload.
+staging/
+output/
+*.exe
