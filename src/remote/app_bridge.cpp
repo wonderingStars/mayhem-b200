@@ -315,6 +315,11 @@ void AppBridge::refresh() {
         status.set("can_transmit", JsonValue::boolean(ctx.radio->caps().has_tx));
     }
     status.set("receiving", JsonValue::boolean((ctx.receiver != nullptr) && ctx.receiver->running()));
+    /* Whether the current app routes demodulated audio to the speaker. False
+     * for data decoders that opt out of the monitor; only meaningful while a
+     * receiver is running, so it is sent only then. */
+    if (ctx.receiver != nullptr && ctx.receiver->running())
+        status.set("audio_monitor", JsonValue::boolean(ctx.receiver->audio_monitor()));
     status.set("transmitting", JsonValue::boolean((ctx.radio != nullptr) && ctx.radio->tx_running()));
     status.set("version", JsonValue::string(app::kVersion));
 

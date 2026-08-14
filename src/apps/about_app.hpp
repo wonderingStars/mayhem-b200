@@ -104,7 +104,16 @@ namespace app {
  * used to clock digital silence through the speakers forever anyway; the
  * feeder now parks after a buffer's worth of dry blocks and one write()
  * wakes it. */
-constexpr const char* kVersion = "0.14.2";
+/* 0.15.0: only the apps that need sound make it. A speaker-monitor flag on
+ * ReceiverModel (default on, re-asserted by every set_mode) lets the eight
+ * pure data/image decoders — ACARS, FLEX, POCSAG, APRS, AFSK, NOAA APT,
+ * WEFAX, 2-Tone — skip the demod-to-speaker chain entirely; they decode from
+ * their own tap and the audio was only modem tones. Listening apps (FM,
+ * Audio, VOR's Morse ident, Morse, Foxhunt, Scanner...) are untouched.
+ * GET /api/status carries audio_monitor. Keyfob's TX-readiness messaging is
+ * honest now (it works on a B200 — verified on hardware — and reports the
+ * radio's real error on failure instead of always blaming an absent B200). */
+constexpr const char* kVersion = "0.15.0";
 
 class AboutView : public ui::View {
    public:

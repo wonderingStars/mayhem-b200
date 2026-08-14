@@ -114,6 +114,9 @@ void AcarsRxView::on_show() {
     /* AM is the right analogue mode for the loudspeaker too — ACARS is an
      * amplitude-modulated MSK subcarrier, so the operator hears the bursts. */
     receiver_.set_mode(radio::ReceiverModel::Mode::AMAudio);
+  /* Data decoder: no speaker monitor. It reads its own tap; the
+     * demodulated audio would be modem tones nobody needs. */
+    receiver_.set_audio_monitor(false);
     receiver_.set_am_configuration(radio::ReceiverModel::AmConfig::DSB9k);
     if (!receiver_.running()) receiver_.start();
 

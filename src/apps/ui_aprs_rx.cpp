@@ -928,6 +928,9 @@ void AprsRxView::on_show() {
     ui::View::on_show();
 
     receiver_.set_mode(radio::ReceiverModel::Mode::NarrowbandFMAudio);
+  /* Data decoder: no speaker monitor. It reads its own tap; the
+     * demodulated audio would be modem tones nobody needs. */
+    receiver_.set_audio_monitor(false);
     receiver_.set_nfm_configuration(radio::ReceiverModel::NfmConfig::Medium11k);
     if (receiver_.sampling_rate() != kAprsSamplingRate)
         receiver_.set_sampling_rate(kAprsSamplingRate);

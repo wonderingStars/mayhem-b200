@@ -311,6 +311,9 @@ void NoaaAptRxView::on_show() {
      * above is independent of it. APT is ~34 kHz wide, so the narrower of the
      * two WFM configurations is the closest fit Mayhem's mode list offers. */
     receiver_.set_mode(radio::ReceiverModel::Mode::WidebandFMAudio);
+  /* Data decoder: no speaker monitor. It reads its own tap; the
+     * demodulated audio would be modem tones nobody needs. */
+    receiver_.set_audio_monitor(false);
     receiver_.set_wfm_configuration(radio::ReceiverModel::WfmConfig::Narrow180k);
 
     chain_valid_ = false;

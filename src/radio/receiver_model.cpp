@@ -464,6 +464,13 @@ void ReceiverModel::retune_if_needed() {
  * by user input, so the cost is irrelevant. */
 
 void ReceiverModel::set_mode(Mode mode) {
+    /* Every app configures the receiver through set_mode, so this is where the
+     * speaker monitor's default lives: ON. A pure-data app (ACARS, FLEX, the
+     * pagers...) that wants no sound calls set_audio_monitor(false) AFTER
+     * set_mode; a listening app just leaves it. Set unconditionally, before
+     * the same-mode early return, so a decoder->listening-app switch that
+     * happens to keep the same demod mode still comes back audible. */
+    audio_monitor_.store(true);
     {
         std::lock_guard<std::mutex> g{chain_mutex_};
         if (mode == mode_) return;
@@ -813,6 +820,14 @@ void ReceiverModel::dsp_thread_main() {
         channel_level_db_.store(dsp::to_db(level));
         const bool open = squelch_.update(level);
         squelch_open_.store(open);
+
+        /* Monitor off: this app decodes from its own tap and wants no sound,
+         * so skip the entire demod-to-speaker chain. The channel level above
+         * is still published (some decoder UIs show it), and with nothing
+         * written to the audio ring the output goes idle and the DAC stops
+         * clocking silence. Decoding is unaffected — it reads the raw tap,
+         * not this. */
+        if (!audio_monitor_.load()) continue;
 
         demodulated.clear();
         switch (mode_) {

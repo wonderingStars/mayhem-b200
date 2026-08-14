@@ -103,9 +103,13 @@ PocsagAppView::PocsagAppView()
 
     if (receiver_) {
         /* POCSAG is narrowband FM; the app owns the tuning but the demod chain
-         * it needs is its own, so the receiver stays in NFM for the audio
-         * monitor and the decoder taps the raw band separately. */
+         * it needs is its own — the decoder taps the raw band separately. The
+         * NFM mode is kept only for that tap's channel setup; the speaker
+         * monitor is off, because a pager decoder's product is the decoded
+         * text, not the FSK warble (operator request 2026-08-14, "only sounds
+         * from the ones that need it"). */
         receiver_->set_mode(radio::ReceiverModel::Mode::NarrowbandFMAudio);
+        receiver_->set_audio_monitor(false);
         receiver_->set_nfm_configuration(radio::ReceiverModel::NfmConfig::Medium11k);
         if (receiver_->target_frequency() == 0) receiver_->set_target_frequency(kDefaultFrequency);
 

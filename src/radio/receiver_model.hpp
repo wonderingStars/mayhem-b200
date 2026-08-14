@@ -320,6 +320,14 @@ class ReceiverModel {
     uint8_t squelch_level() const { return squelch_level_; }
 
     void set_volume(uint8_t volume_0_99);
+
+    /* The speaker monitor. True (the default, re-asserted by every set_mode)
+     * plays the demodulated audio; false skips the demod-to-speaker chain
+     * entirely, for data-decoder apps that produce no sound worth hearing and
+     * decode from their own tap. Does not affect decoding, capture, the raw
+     * tap or the spectrum tap. */
+    void set_audio_monitor(bool on) { audio_monitor_.store(on); }
+    bool audio_monitor() const { return audio_monitor_.load(); }
     uint8_t volume() const;
 
     /* Capture bandwidth. Larger gives a wider waterfall at more CPU cost.
@@ -426,6 +434,7 @@ class ReceiverModel {
 
     std::thread dsp_thread_;
     std::atomic<bool> running_{false};
+    std::atomic<bool> audio_monitor_{true};
     std::atomic<bool> stop_{false};
 
     /* Guards the filter/demod objects against reconfiguration mid-block. */

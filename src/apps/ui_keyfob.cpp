@@ -136,7 +136,21 @@ KeyfobView::KeyfobView() {
     console_.enable_scrolling(true);
     console_.writeln(STR_COLOR_YELLOW "Car-remote spoof.");
     console_.writeln(STR_COLOR_YELLOW "TX is illegal almost everywhere.");
-    console_.writeln(STR_COLOR_LIGHT_GREY "RF needs a USRP B200.");
+
+    /* State the transmit readiness honestly rather than a bare "needs a B200"
+     * that reads as "won't work here" even with one attached (reported
+     * 2026-08-14). 433.92 MHz at 500 kSps is well inside a B200's range; the
+     * app already generates its OOK in software and tunes a legal carrier, so
+     * a connected radio transmits it directly. */
+    auto* tx = globals().transmitter;
+    const bool tx_ready = (tx != nullptr) && (globals().radio != nullptr) &&
+                          globals().radio->is_open() && globals().radio->caps().has_tx;
+    if (tx_ready) {
+        console_.writeln(STR_COLOR_GREEN "TX ready: " +
+                         globals().radio->caps().mboard + ".");
+    } else {
+        console_.writeln(STR_COLOR_LIGHT_GREY "No TX radio — connect a USRP to transmit.");
+    }
 }
 
 KeyfobView::~KeyfobView() {
@@ -201,7 +215,15 @@ void KeyfobView::start_tx() {
     });
 
     if (!tx->start()) {
-        console_.writeln(STR_COLOR_RED "TX start failed (no B200).");
+        /* Report the radio's actual reason rather than always blaming an
+         * absent B200 — the transmitter fails to start for a busy device or a
+         * rejected setting too, and "(no B200)" on a connected radio is
+         * exactly the false alarm the operator hit. */
+        auto* r = globals().radio;
+        const std::string why = (r != nullptr && !r->last_error().empty())
+                                    ? r->last_error()
+                                    : "no transmit radio";
+        console_.writeln(STR_COLOR_RED "TX start failed: " + why);
         tx->set_iq_source(nullptr);
         return;
     }

@@ -27,6 +27,7 @@
 #include "test_main.hpp"
 
 #include "usrp_radio.hpp"
+#include "transmitter_model.hpp"
 
 #include "../src/dsp/fft.hpp"
 
@@ -359,5 +360,51 @@ TEST(usrp_hw_tx_tone_lands_on_the_programmed_frequency) {
         CHECK(std::fabs(peak.freq_hz - kOffset) < 500.0);
     }
 
+    r.close();
+}
+
+/* --- The keyfob TX path, end to end on hardware -----------------------------
+ *
+ * Reported (2026-08-14): the Key Fob app "says you can't use it with the
+ * B200". The app transmits OOK at 433.92 MHz, 500 kHz sample rate — both well
+ * inside the B200's range (70 MHz..6 GHz, 200 kSps..61.44 MSps) — and it
+ * already generates its IQ in software then tunes a legal carrier, which is
+ * the only architecture a B200 can transmit a sub-audio waveform with anyway.
+ * So either tx->start() genuinely fails on this radio, or the app's grey
+ * "RF needs a USRP B200" info line was misread. This drives the exact path
+ * KeyfobView::start_tx() uses — TransmitterModel, Raw mode, an IQ source —
+ * and settles it: tx_samples must climb. Zeros as the waveform (nothing
+ * radiated); the point is that the transmit chain STARTS and RUNS. */
+TEST(usrp_hw_keyfob_style_tx_path_starts_and_runs) {
+    if (!hw_tests_enabled()) return;
+
+    radio::UsrpRadio r;
+    CHECK(open_with_retry(r));
+    if (!r.is_open()) return;
+
+    radio::TransmitterModel tx{r};
+    tx.set_mode(radio::TransmitterModel::Mode::Raw);
+    tx.set_sampling_rate(500'000.0); /* keyfob's kSampleRateHz */
+    tx.set_target_frequency(433'920'000);
+    tx.set_iq_source([](radio::cfloat* out, size_t n) -> size_t {
+        for (size_t i = 0; i < n; i++) out[i] = radio::cfloat{0.0f, 0.0f};
+        return n;
+    });
+
+    CHECK(tx.start()); /* the exact call whose false the app reports as "(no B200)" */
+    if (!tx.running()) {
+        std::printf("  keyfob-path tx.start() returned false (last_error=%s)\n",
+                    r.last_error().c_str());
+        r.close();
+        return;
+    }
+
+    std::this_thread::sleep_for(std::chrono::seconds(2));
+    const uint64_t sent = r.stats().tx_samples.load();
+    std::printf("  keyfob-path tx: %llu samples in 2s (underflows=%u errors=%u)\n",
+                (unsigned long long)sent, r.stats().underflows.load(), r.stats().errors.load());
+    CHECK(sent > 100'000);
+
+    tx.stop();
     r.close();
 }

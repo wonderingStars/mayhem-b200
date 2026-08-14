@@ -177,6 +177,9 @@ void AfskRxView::on_show() {
     receiver_.set_target_frequency(field_frequency_.value());
     receiver_.set_sampling_rate(kAfskCaptureRate);
     receiver_.set_mode(radio::ReceiverModel::Mode::NarrowbandFMAudio);
+  /* Data decoder: no speaker monitor. It reads its own tap; the
+     * demodulated audio would be modem tones nobody needs. */
+    receiver_.set_audio_monitor(false);
     receiver_.set_nfm_configuration(radio::ReceiverModel::NfmConfig::Medium11k);
     if (!receiver_.running()) receiver_.start();
 

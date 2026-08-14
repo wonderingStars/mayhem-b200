@@ -516,6 +516,9 @@ void TwoToneRxView::on_hide() {
 
 void TwoToneRxView::start_rx() {
     receiver_.set_mode(radio::ReceiverModel::Mode::NarrowbandFMAudio);
+  /* Data decoder: no speaker monitor. It reads its own tap; the
+     * demodulated audio would be modem tones nobody needs. */
+    receiver_.set_audio_monitor(false);
     receiver_.set_nfm_configuration(radio::ReceiverModel::NfmConfig::Medium11k);
     receiver_.set_squelch_level(static_cast<uint8_t>(squelch_val_));
     if (!receiver_.running()) receiver_.start();

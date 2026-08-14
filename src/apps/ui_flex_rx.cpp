@@ -47,6 +47,9 @@ FlexRxView::FlexRxView()
 
     if (receiver_) {
         receiver_->set_mode(radio::ReceiverModel::Mode::NarrowbandFMAudio);
+  /* Data decoder: no speaker monitor. It reads its own tap; the
+     * demodulated audio would be modem tones nobody needs. */
+    receiver_->set_audio_monitor(false);
         receiver_->set_nfm_configuration(radio::ReceiverModel::NfmConfig::Wide16k);
         if (receiver_->target_frequency() == 0) receiver_->set_target_frequency(kDefaultFrequency);
         field_frequency_.set_value(receiver_->target_frequency(), false);

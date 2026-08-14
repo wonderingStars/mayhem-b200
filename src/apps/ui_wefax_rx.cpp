@@ -310,6 +310,9 @@ void WeFaxRxView::on_show() {
     receiver_.set_sampling_rate(kCaptureRate);
     /* Monitoring only; the decode chain above is independent. */
     receiver_.set_mode(radio::ReceiverModel::Mode::AMAudio);
+  /* Data decoder: no speaker monitor. It reads its own tap; the
+     * demodulated audio would be modem tones nobody needs. */
+    receiver_.set_audio_monitor(false);
     receiver_.set_am_configuration(radio::ReceiverModel::AmConfig::USB);
 
     chain_valid_ = false;
