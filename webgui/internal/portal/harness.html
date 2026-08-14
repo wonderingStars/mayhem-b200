@@ -123,10 +123,11 @@
       single static render can't show.
     </p>
     <p class="hint">
-      The adsb panel draws an OpenStreetMap basemap, pulling live tiles through
-      this server's /api/tiles/{z}/{x}/{y}.png route — the same one the real
-      portal serves. With no network it falls back to its own graticule, exactly
-      as it does in production.
+      The adsb, map and geotable panels draw an OpenStreetMap basemap, pulling
+      live tiles through this server's /api/tiles/{z}/{x}/{y}.png route — the
+      same one the real portal serves. With no network they fall back to their
+      own graticule, exactly as they do in production; run this harness with
+      -tiles off to see that fallback on a machine that does have one.
     </p>
   </nav>
 

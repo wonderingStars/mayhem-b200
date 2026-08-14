@@ -300,17 +300,71 @@ read it as a capture of what the C++ side emits — for that, the escapes come o
 }
 ```
 
-Offline canvas map (no tile service): equirectangular projection with a latitude-
-cosine x-correction, a lat/lon graticule that thins out as you zoom in, pan by drag,
-zoom by wheel/buttons, "fit to markers" on first load and on demand. `heading`
+A canvas map with an OpenStreetMap street basemap under the markers: pan by drag,
+zoom by wheel/buttons, "fit to markers" on first load and on demand, and a lat/lon
+graticule over the streets — or instead of them, when there are none. `heading`
 (degrees, optional) rotates a marker's arrow glyph; without it, a plain dot. `kind`
 picks a colour (`aircraft`/`vessel`/anything else); click a marker for a detail
 tooltip.
 
 WardriveMap is the only backend that publishes this kind directly
 (`src/remote/provider_wardrive.cpp`); ADS-B and AIS each have their own richer
-kind, and APRS, EPIRB RX and Radiosonde RX publish `geotable`, which mounts
-this renderer as its upper half.
+kind, and APRS, EPIRB RX and Radiosonde RX publish `geotable`, which mounts this
+renderer as its upper half. The basemap reaches all of them through that one
+renderer: `geotable.js` composes `map.js` and needed no change to gain it.
+
+**The projection is true Web Mercator (EPSG:3857)**, for the reason spelled out at
+length in the `adsb` section below: OSM tiles *are* Web Mercator, and the
+equirectangular projection this panel used before tiles can be made to agree with
+them at exactly one latitude and nowhere else — ~310 m out half a degree from the
+centre at UK latitudes, ~1.25 km a degree out, worst zoomed out. Both map panels now
+use the same slippy-map formulas, the same continuous zoom mapped onto the tile `z`,
+and the same latitude clamp of ±85.05112878.
+
+Tiles come from the portal's own `GET /api/tiles/{z}/{x}/{y}.png` — the endpoint
+documented under `adsb`, on the same terms, with no server change: `internal/portal/tiles`
+is mounted once on `tiles.Route` and serves whichever panel asks. Root-relative, so
+the page never names a host and the portal still works air-gapped. The two OSM tile
+usage policy obligations that land on the browser side apply here identically:
+the credit is on screen whenever tiles are, and requests are strictly demand-driven
+(only tiles the current viewport is about to draw — no prefetch, no warm-up, no
+"download this area").
+
+**The degrade is the load-bearing half of this design, because most of the time there
+is no basemap at all.** A bench B200 with no internet, an air-gapped install and a
+portal started with `-tiles off` (which answers 503) are all normal operating cases,
+not failures, so:
+
+- **Markers first, streets when they arrive.** Nothing waits for a tile. The first
+  frame is painted before any tile can have loaded and already carries every marker.
+- **Any non-200 is just "no basemap".** A failed tile is remembered as failed and
+  never retried in a draw loop; once several requests have failed with *nothing* ever
+  having loaded, the layer gives up entirely rather than storming a dead endpoint —
+  measured at one screenful (12 requests) before it stops asking, after which
+  re-rendering, panning and zooming issue none. Giving up is per-panel-instance and
+  permanent; a reload is what retries a portal that has since found a network.
+- **The fallback is the graticule this panel always drew.** It is drawn on every
+  frame, over the tiles at low contrast and alone when there are none, so a tile that
+  never arrives leaves the graticule showing through its slot. There is no state in
+  which this panel is a half-loaded checkerboard, and none in which it is blank.
+- **The whole report is one quiet line**, bottom-right: "Basemap unavailable —
+  running offline". No dialog, nothing to dismiss, and the map keeps working around
+  it.
+- **The OSM credit is shown only on a frame that actually painted a tile.** An
+  offline graticule owes OpenStreetMap nothing, and crediting it for a map it did not
+  supply would be a false claim about where the picture came from.
+
+Adding the basemap changed no payload: the marker contract below is untouched, and
+`testdata/cpp_panel_map.json` and the payload contract test are as they were. What
+guards the presentation instead is `server/map_basemap_test.go`, which *runs*
+`panels/map.js` under node against a stub DOM
+(`server/testdata/map_basemap_probe.js`) and asserts on what it did — which URLs it
+asked for (fed back through the proxy's own `tiles.ParsePath`), that markers are on
+the first frame before any tile answers, that a dead endpoint is dropped, that the
+graticule and the markers survive it, and when the credit appears. It skips where
+node is unavailable; the licence and air-gap guards in the same file are plain string
+checks and never skip.
+
 
 #### The C++ backend's marker shape
 
@@ -387,10 +441,11 @@ the discrepancy is worst zoomed out, which is exactly the overview a traffic
 view is for. So this panel uses the standard slippy-map formulas
 (latitude clamped to ±85.05112878 before projecting) and its zoom maps onto the
 tile zoom `z`, which is what keeps aircraft, trails, range rings and the tiles
-underneath them all agreeing with each other. The `map` kind above stays
-equirectangular; it has no tiles to agree with.
+underneath them all agreeing with each other. The `map` kind above has the same
+basemap and therefore the same requirement, and uses the same formulas.
 
-Tiles are fetched from the portal, never straight from the browser to OSM:
+Tiles are fetched from the portal — by this panel and by `map` above, from the
+one endpoint — never straight from the browser to OSM:
 
 ```
 GET /api/tiles/{z}/{x}/{y}.png
@@ -627,6 +682,10 @@ lands here for free. It strips the two children's card chrome (they are each a f
 `.mp-panel` in their own right) and adds the one number neither half can show alone:
 **"N of M located"**.
 
+The OpenStreetMap basemap is the worked example of "a fix to either lands here for
+free": it was added to `panels/map.js` and this panel's upper half has it, with the
+same offline fallback, and not a line of `geotable.js` changed.
+
 That number is the point of the kind. **Markers exist only for entries that have a real
 position fix**; an entry without one is in the table and not on the map. A station
 heard through a status or telemetry packet only, or a vessel that has broadcast its
@@ -733,7 +792,8 @@ load `server/static/panels/*.js` and `testdata/*.json` over real HTTP — `fetch
 `file://` pages is blocked by browsers, so this is the difference between "the panels
 demonstrably work" and "trust me". It is a dev-only tool: apart from
 `/api/tiles/{z}/{x}/{y}.png` — which it serves to the same contract as the real server,
-so the `adsb` basemap behaves identically in both — it implements none of
+so the `adsb` and `map` basemaps behave identically in both, and `-tiles off` is how
+the offline fallback is exercised in a browser — it implements none of
 `internal/portal/server`'s real endpoints (`/api/apps`, `/api/panel`, ...) and is not
 meant to. Pick a kind from the sidebar to load its fixture; "Simulate live updates"
 re-renders on a timer with the fixture perturbed (spectrum bins jittered, table rows
