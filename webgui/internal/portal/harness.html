@@ -96,6 +96,13 @@
     <button data-fixture="console_backend" data-kind="console">console (C++ backend shape)</button>
     <button data-fixture="map" data-kind="map">map</button>
     <button data-fixture="adsb" data-kind="adsb">adsb (live traffic)</button>
+    <!-- The AIS vessel chart. The fixture is deliberately mixed: named ships
+         with heading and SOG, one MMSI-only contact that has a position but
+         has never reported an orientation (drawn as a ringed dot, never a hull
+         pointing north), and two heard only through a message carrying no
+         position at all -- those belong in the table and NOT on the chart. -->
+    <button data-fixture="ais" data-kind="ais">ais (vessel chart)</button>
+    <button data-fixture="ais_empty" data-kind="ais">ais (nothing heard)</button>
     <button data-fixture="image" data-kind="image">image (decoded frame)</button>
     <!-- Click "image" first, then this: same rev with data_b64 omitted is what
          the backend sends once the client reports the rev it already has, and
@@ -136,6 +143,7 @@
 <script src="server/static/panels/console.js"></script>
 <script src="server/static/panels/map.js"></script>
 <script src="server/static/panels/adsb.js"></script>
+<script src="server/static/panels/ais.js"></script>
 <script src="server/static/panels/image.js"></script>
 <script src="server/static/panels/geotable.js"></script>
 <script src="server/static/panels/screen.js"></script>
@@ -364,6 +372,42 @@
     currentData.stats.frames_seen = (Number(currentData.stats.frames_seen) || 0) + 61;
   }
 
+  // Steams every located vessel along its own course and, every few ticks,
+  // gives one of the contacts that has never reported a position its first
+  // fix. That transition is the point: the vessel count must not move while
+  // "N with position" climbs, and the promoted contact must move from the
+  // table only onto the chart. Fields the fixture leaves absent stay absent --
+  // a vessel with no COG is never given one here, because the panel's
+  // never-fabricate-an-orientation rule is exactly what these ticks exercise.
+  const AIS_LATE_FIXES = [
+    { mmsi: "232889001", lat: 50.8402, lon: -1.2688 },
+    { mmsi: "244140789", lat: 50.7256, lon: -1.0870 },
+  ];
+  function simulateAis() {
+    const vessels = currentData.vessels || [];
+    vessels.forEach((v, i) => {
+      v.msgs = (Number(v.msgs) || 0) + 1 + (i % 2);
+      if (!Number.isFinite(v.lat) || !Number.isFinite(v.lon)) return;
+      const kn = Number(v.sog_kn) || 0;
+      const cog = Number.isFinite(v.cog_deg) ? v.cog_deg : null;
+      if (cog === null || kn <= 0) return;   // stopped, or no course to steam along
+      const degPerTick = (kn / 3600) / 60;   // ~1 simulated second per tick
+      const rad = cog * Math.PI / 180;
+      v.lat += Math.cos(rad) * degPerTick;
+      v.lon += Math.sin(rad) * degPerTick / (Math.cos(v.lat * Math.PI / 180) || 1);
+      if (Number.isFinite(v.heading_deg)) {
+        v.heading_deg = (v.heading_deg + Math.sin(tick / 6 + i) * 1.2 + 360) % 360;
+      }
+    });
+    const promote = AIS_LATE_FIXES[Math.floor(tick / 5) - 1];
+    if (tick % 5 === 0 && promote) {
+      const v = vessels.find((x) => x.mmsi === promote.mmsi);
+      if (v && !Number.isFinite(v.lat)) { v.lat = promote.lat; v.lon = promote.lon; }
+    }
+    currentData.stats = currentData.stats || {};
+    currentData.stats.packets_valid = (Number(currentData.stats.packets_valid) || 0) + 7;
+  }
+
   function simulateTick() {
     tick++;
     if (currentFixture === "table") simulateTable();
@@ -374,6 +418,7 @@
     else if (currentFixture === "console_backend") simulateConsoleBackend();
     else if (currentFixture === "map") simulateMap();
     else if (currentFixture === "adsb") simulateAdsb();
+    else if (currentFixture === "ais") simulateAis();
     else if (currentFixture === "image") simulateImage();
     else if (currentFixture === "geotable") simulateGeotable();
     renderNow();

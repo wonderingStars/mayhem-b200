@@ -145,13 +145,15 @@
      glyph visible for one paint on every load. -->
 <script src="icons.js"></script>
 <script src="app.js"></script>
-<!-- The richer panel renderers (table/spectrum/receiver/console/map/image/
-     geotable/screen; see ../../PANELS.md). registry.js must load before the
-     per-kind files; bridge.js must load last -- it wires MayhemPanels into
+<!-- The richer panel renderers (table/spectrum/receiver/console/map/adsb/ais/
+     image/geotable/screen; see ../../PANELS.md). registry.js must load before
+     the per-kind files; bridge.js must load last -- it wires MayhemPanels into
      app.js's own MayhemPortal.registerPanel(), overriding app.js's minimal
      built-in "table" with this richer one and adding the kinds app.js doesn't
      have. geotable.js composes the map and table renderers at call time, not
-     at load time, so its position among them does not matter. -->
+     at load time, so its position among them does not matter. ais.js, like
+     adsb.js, draws its own chart and composes nothing, so it is likewise free
+     of ordering constraints beyond registry.js first. -->
 <script src="panels/registry.js"></script>
 <script src="panels/table.js"></script>
 <script src="panels/spectrum.js"></script>
@@ -159,6 +161,7 @@
 <script src="panels/console.js"></script>
 <script src="panels/map.js"></script>
 <script src="panels/adsb.js"></script>
+<script src="panels/ais.js"></script>
 <script src="panels/image.js"></script>
 <script src="panels/geotable.js"></script>
 <script src="panels/screen.js"></script>

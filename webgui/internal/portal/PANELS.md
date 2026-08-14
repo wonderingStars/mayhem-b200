@@ -308,8 +308,9 @@ picks a colour (`aircraft`/`vessel`/anything else); click a marker for a detail
 tooltip.
 
 WardriveMap is the only backend that publishes this kind directly
-(`src/remote/provider_wardrive.cpp`); ADS-B has its own richer kind and APRS/AIS
-publish `geotable`, which mounts this renderer as its upper half.
+(`src/remote/provider_wardrive.cpp`); ADS-B and AIS each have their own richer
+kind, and APRS publishes `geotable`, which mounts this renderer as its upper
+half.
 
 #### The C++ backend's marker shape
 
@@ -457,6 +458,99 @@ itself is unmodified. Three things follow from that, and are deliberate:
 keeps a trail only for the aircraft whose detail page is open. They start over on
 reload; nothing else depends on them.
 
+### `ais`
+
+The vessel equivalent of `adsb`, and the kind AIS RX publishes: a Web Mercator
+chart of ship traffic — hull-shaped targets rotated to their heading, six-minute
+course/speed vectors, per-MMSI trails and an OpenStreetMap basemap — cross-linked
+to a sortable ship table. AIS used to publish `geotable`; that kind is unchanged
+and still serves APRS RX and WardriveMap.
+
+```jsonc
+{
+  "vessels": [
+    {
+      "mmsi":        "244660320",          // string, ALWAYS present (the key)
+      "name":        "EVER GIVEN",         // omitted when the formatted name is empty
+      "callsign":    "PBSC",               // omitted when the formatted call sign is empty
+      "destination": "ROTTERDAM",          // omitted when the formatted destination is empty
+      "lat": 50.7712, "lon": -1.2984,      // BOTH omitted unless the app's own gate passes
+      "sog_kn":      12.4,                 // knots; omitted when unavailable (raw 1023)
+      "cog_deg":     96.3,                 // degrees; omitted when unavailable (raw 3600)
+      "heading_deg": 94,                   // degrees; omitted when raw >= 511
+      "nav_status":  0,                    // 0..15; omitted when the app holds -1
+      "msgs":        148,                  // received_count
+      "time":        "2026-08-14 09:41:02" // last_position.timestamp verbatim; omitted when empty
+    }
+  ],
+  "stats": { "packets_valid": 4213 }       // AISAppView::packets_valid()
+}
+```
+
+Every field above except `mmsi`, `msgs` and `stats` is optional, and **absent
+stays absent — no zeros, no placeholders, no empty-string fields.** That is the
+firmest rule in this document and this kind is where it bites hardest, because
+every one of these absences is normal traffic rather than an error:
+
+- `lat`/`lon` are emitted **only when the app's own validity gate passes**
+  (`pos.latitude.is_valid() && pos.longitude.is_valid()`), in degrees via the
+  app's own `ais::format::latlon_float` on `normalized()` values. Both are
+  omitted together. A vessel heard through a message 5 (static and voyage data)
+  and nothing else has no position at all — it belongs in the table and **not**
+  on the chart, and it is emphatically not at 0°N 0°E. Conversely the panel does
+  *not* discard a fix of exactly 0, 0: since the wire can never mean "unknown" by
+  it, there it can only mean a ship in the Gulf of Guinea.
+- `sog_kn` is knots, from a raw field in tenths of a knot. Raw 1023 is "not
+  available" and is omitted; raw 1022 means "102.2 knots **or more**" and is sent
+  as `102.2`, which is why the panel prints "≥" at exactly that value and nowhere
+  else.
+- `cog_deg` (course over ground, raw tenths of a degree, 3600 = not available)
+  and `heading_deg` (true heading, raw >= 511 = not available) measure different
+  things and are separately optional. The panel resolves them **without inventing
+  either**: the hull is rotated to `heading_deg` falling back to `cog_deg`, the
+  speed vector is drawn along `cog_deg` falling back to `heading_deg`, and a
+  vessel that has reported neither is drawn as a **ringed dot with no
+  orientation at all** rather than a hull pointing due north. A vector is drawn
+  only when there is both a course and a speed.
+- `nav_status` is ITU-R M.1371's 0..15. The table prints
+  `ais::format::navigational_status`'s own words (the same ones the device's
+  screen shows), and the target is coloured by class: under way (0, 8) green,
+  anchored or moored (1, 5) amber, hampered or special (2, 3, 4, 6, 7, 11, 12,
+  14) red, and neutral for the codes that carry no operational meaning (9, 10,
+  13, 15) as well as for a vessel that has never reported one.
+
+`stats.packets_valid` is the only backend statistic. Until one has arrived the
+readout leaves it out entirely rather than showing a zero the backend never
+claimed; once one has, a later payload that omits it keeps the last figure
+(the counter only climbs, so the last one read is a true lower bound, and
+blanking it on a malformed tick would lose information rather than add it).
+The **"N with position" figure
+beside it is counted in the browser** from which vessels arrived with
+coordinates — the backend sends no such number — and it is labelled as such on
+screen so it cannot be read as one.
+
+Trails, like the ADS-B panel's, are the browser's own: the C++ side keeps no
+track history, so they accumulate across polls and start over on reload.
+Basemap tiles come from the same `/api/tiles/{z}/{x}/{y}.png` proxy, under the
+same OSM tile usage policy obligations documented under `adsb` — attribution
+visible whenever tiles are, demand-driven requests only, any non-200 treated
+silently as "no basemap".
+
+Two implementation notes that are corrections of the `adsb` panel rather than
+copies of it, and should be kept if these two files are ever unified:
+
+- **No rule styles the panel root.** Kind classes are sticky (see
+  `panels.css`), so `.mp-adsb`'s root rule — `gap`, `min-height` — keeps
+  applying to whatever is rendered into that mount afterwards. This panel puts
+  its layout on an inner `.mp-ais-root` element instead, which the next
+  renderer's `innerHTML` clear removes.
+- **Interaction repaints do not depend on `requestAnimationFrame`.** rAF does
+  not run in a hidden tab or a non-compositing pane, which is exactly where
+  these panels get verified: with an rAF-only path, toggling units left the
+  scale bar reading "2 nm" over a chart redrawn in kilometres. Every repaint
+  request goes through a `scheduleDraw` that coalesces on a 0 ms timeout as
+  well as on the frame loop.
+
 ### `image`
 
 The picture an image-producing RX app is building up — NOAA APT, WeFax, SSTV — at
@@ -509,8 +603,11 @@ verified (`panels/adsb.js`'s `drawNow` exists for the same reason).
 
 ### `geotable`
 
-For apps whose entries *are* positions — AIS, APRS, WardriveMap: the map above the
-table it came from, in one panel.
+For apps whose entries *are* positions — APRS RX and WardriveMap: the map above
+the table it came from, in one panel. AIS published this kind too until it was
+given the dedicated `ais` kind above; the fixture below keeps its ship-shaped
+sample data, which is still a faithful example of the shape and is what
+`harness.html`'s geotable button loads.
 
 ```jsonc
 {
@@ -592,8 +689,8 @@ repurposed.
 
 `internal/portal/testdata/*.json` has at least one fixture per kind (more where a kind
 has genuinely distinct states: `spectrum` active/idle, `image` decoded/cache-hit/
-nothing-decoded, and the C++ backend's own flat shapes for `table` and `console`),
-matching the shapes above exactly. `harness.html` (see below) is driven entirely from
+nothing-decoded, `ais` populated/nothing-heard, and the C++ backend's own flat shapes
+for `table` and `console`), matching the shapes above exactly. `harness.html` (see below) is driven entirely from
 these files — there is no other source of demo data — so they double as the contract's
 executable documentation. (`TestFixturesAreServedAsIs` in `cmd/panels-harness` pins a
 named subset of them; fixtures added since, `adsb.json` included, are not in that list.)
@@ -633,6 +730,13 @@ busy, and are worth keeping that way:
 - **`geotable`** drifts the located contacts and, every few ticks, gives one of the
   entries that has no position fix its first one, so "4 of 6 located" climbs to
   "6 of 6" while the row count stays at 6 — the absent-position rule, visible.
+- **`ais`** steams every located vessel along its own COG at its own SOG (so
+  trails accumulate and the six-minute vectors stay attached to real motion) and,
+  every few ticks, gives one of the contacts that has never reported a position
+  its first fix: the vessel count must not move while "N with position" climbs
+  and the promoted contact leaves the table-only state. Vessels with no course
+  are deliberately not given one — the never-fabricate-an-orientation rule is
+  what these ticks are for. `ais (nothing heard)` is the honest empty state.
 
 Panels diff against their own previous state and there is no unmount hook, so loading a
 second fixture of the *same* kind is an update, not a reset (that is what makes the

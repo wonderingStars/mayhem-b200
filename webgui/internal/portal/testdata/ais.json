@@ -1,0 +1,102 @@
+{
+  "vessels": [
+    {
+      "mmsi": "244660320",
+      "name": "EVER GIVEN",
+      "callsign": "PBSC",
+      "destination": "ROTTERDAM",
+      "lat": 50.7712,
+      "lon": -1.2984,
+      "sog_kn": 12.4,
+      "cog_deg": 96.3,
+      "heading_deg": 94,
+      "nav_status": 0,
+      "msgs": 148,
+      "time": "2026-08-14 09:41:02"
+    },
+    {
+      "mmsi": "235012456",
+      "name": "SOLENT TRADER",
+      "callsign": "MJKL7",
+      "destination": "PORTSMOUTH",
+      "lat": 50.8021,
+      "lon": -1.1147,
+      "sog_kn": 8.1,
+      "cog_deg": 271.4,
+      "heading_deg": 274,
+      "nav_status": 0,
+      "msgs": 96,
+      "time": "2026-08-14 09:41:00"
+    },
+    {
+      "mmsi": "232003859",
+      "lat": 50.7433,
+      "lon": -1.2001,
+      "msgs": 3,
+      "time": "2026-08-14 09:40:37"
+    },
+    {
+      "mmsi": "209512000",
+      "name": "MARIE JOSEPHE",
+      "callsign": "9HA4721",
+      "lat": 50.8194,
+      "lon": -1.3316,
+      "sog_kn": 0.0,
+      "cog_deg": 183.2,
+      "nav_status": 1,
+      "msgs": 41,
+      "time": "2026-08-14 09:40:54"
+    },
+    {
+      "mmsi": "503012340",
+      "name": "COASTAL RANGER",
+      "callsign": "VJQ2846",
+      "lat": 50.7908,
+      "lon": -1.0512,
+      "sog_kn": 4.6,
+      "cog_deg": 38.9,
+      "heading_deg": 41,
+      "nav_status": 7,
+      "msgs": 62,
+      "time": "2026-08-14 09:40:58"
+    },
+    {
+      "mmsi": "227314000",
+      "name": "BRISE DE MER",
+      "callsign": "FGH2201",
+      "destination": "CHERBOURG",
+      "lat": 50.7115,
+      "lon": -1.1743,
+      "sog_kn": 6.2,
+      "cog_deg": 204.7,
+      "nav_status": 8,
+      "msgs": 27,
+      "time": "2026-08-14 09:40:49"
+    },
+    {
+      "mmsi": "235098765",
+      "name": "PORTSIDE BERTH 4",
+      "lat": 50.8085,
+      "lon": -1.0934,
+      "sog_kn": 0.1,
+      "nav_status": 5,
+      "msgs": 19,
+      "time": "2026-08-14 09:40:31"
+    },
+    {
+      "mmsi": "232889001",
+      "name": "NORTHERN STAR",
+      "callsign": "MBQR5",
+      "destination": "SOUTHAMPTON",
+      "msgs": 8,
+      "time": "2026-08-14 09:39:12"
+    },
+    {
+      "mmsi": "244140789",
+      "msgs": 2
+    }
+  ],
+  "stats": {
+    "packets_valid": 4213
+  }
+}
