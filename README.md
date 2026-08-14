@@ -235,12 +235,22 @@ as-is.
 build\mayhem-b200.exe
 ```
 
+On Windows, `run-mayhem-b200.cmd` in the repo root is a double-click
+launcher: it starts the app against the local USRP, starts the web portal
+beside it, waits until the portal answers (a B200 takes ~20 s to
+initialise), and opens the browser on http://127.0.0.1:8081. Point a
+desktop shortcut at it. It needs both exes in `build\`:
+
+```bash
+cd webgui && go build -o ../build/mayhem-portal.exe ./cmd/mayhem-portal
+```
+
 | Option | Meaning |
 |---|---|
 | `--driver=<uhd\|sdrlink>` | Radio backend. `uhd` talks to a local USRP; `sdrlink` talks to an [sdrlink](https://github.com/wonderingStars/sdrlink-beta) server, which is how you use any non-USRP radio |
 | `--args=<backend args>` | For `uhd`, a device address such as `type=b200,serial=31C9297`. For `sdrlink`, `host[:port]`, optionally `/` and remote device args |
 | `--scale=<1..6>` | Window magnification (default 2) |
-| `--portal[=port]` | Serve the browser UI and JSON API (default 8090) |
+| `--portal[=port]` | Serve the JSON/screen API the web portal talks to (default 8090) |
 | `--list` | List attached USRPs and exit (uhd only) |
 | `--help` | Usage |
 
