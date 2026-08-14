@@ -28,7 +28,12 @@
 
 #include "usrp_radio.hpp"
 
+#include "../src/dsp/fft.hpp"
+
+#include <algorithm>
+#include <atomic>
 #include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <thread>
@@ -191,5 +196,168 @@ TEST(usrp_hw_tx_plumbing_moves_zero_samples) {
 
     r.stop_tx();
     CHECK(!r.tx_running());
+    r.close();
+}
+
+/* --- Transmit frequency verification ----------------------------------------
+ *
+ * Self-loopback: the B200 is full duplex, so it can transmit on the TX/RX
+ * port while receiving on RX2, and the internal port-to-port leakage is
+ * ample signal at bench gains with NOTHING connected. A tone transmitted at
+ * a known baseband offset must appear in the received spectrum at exactly
+ * that offset: if it does, the DAC path, the upconverter and the LO
+ * programming are all putting energy where they were told to. Two widely
+ * separated centres exercise the LO across divider ranges.
+ *
+ * The offset is +100 kHz, not 0: a direct-conversion radio has an LO leakage
+ * spike at DC on both sides, so energy AT the centre proves nothing. The
+ * search excludes a guard band around DC for the same reason.
+ *
+ * What this cannot see: an absolute error in the shared reference crystal —
+ * TX and RX derive from the same TCXO, so a ppm offset cancels. That is
+ * bounded separately by off-air evidence (ADS-B at 1090 MHz decodes with
+ * correct CPR positions, which a meaningfully wrong reference would not).
+ *
+ * Emission: tx gain starts at the caps minimum and only escalates while no
+ * peak is found, capped well below half scale, with no antenna connected —
+ * leakage inside the enclosure is the whole point. */
+
+namespace {
+
+struct TonePeak {
+    double freq_hz{0.0};
+    float level_db{-200.0f};
+    float noise_db{0.0f};
+};
+
+/* Strongest bin outside ±dc_guard_hz, plus the median level as a noise
+ * reference. */
+TonePeak find_tone(const std::vector<radio::cfloat>& samples, double rate, double dc_guard_hz) {
+    const size_t n = 16384;
+    dsp::Fft fft{n};
+    const auto window = dsp::make_window(dsp::WindowType::Hann, n);
+    std::vector<float> db;
+    fft.spectrum_db(samples.data(), window, db);
+
+    const double hz_per_bin = rate / static_cast<double>(n);
+    TonePeak peak;
+    std::vector<float> sorted;
+    sorted.reserve(db.size());
+    for (size_t i = 0; i < db.size(); i++) {
+        const double f = (static_cast<double>(i) - static_cast<double>(n) / 2.0) * hz_per_bin;
+        sorted.push_back(db[i]);
+        if (std::fabs(f) < dc_guard_hz) continue;
+        if (db[i] > peak.level_db) {
+            peak.level_db = db[i];
+            peak.freq_hz = f;
+        }
+    }
+    std::nth_element(sorted.begin(), sorted.begin() + static_cast<ptrdiff_t>(sorted.size() / 2), sorted.end());
+    peak.noise_db = sorted[sorted.size() / 2];
+    return peak;
+}
+
+/* One band: tone at center+offset out of TX/RX, listen on RX2, return the
+ * measured offset of the strongest non-DC bin. */
+bool loopback_tone_check(radio::UsrpRadio& r, double center_hz, double offset_hz, TonePeak& out) {
+    constexpr double kRate = 1e6;
+
+    r.set_rx_antenna("RX2");
+    r.set_rx_rate(kRate);
+    r.set_rx_frequency(center_hz);
+    r.set_rx_gain(60.0);
+    r.set_tx_rate(kRate);
+    r.set_tx_frequency(center_hz);
+    r.set_tx_gain(r.caps().tx_gain.min);
+
+    if (!r.start_tx()) return false;
+    if (!r.start_rx()) {
+        r.stop_tx();
+        return false;
+    }
+
+    /* Continuous-phase tone fed well ahead of the TX thread so underrun
+     * zero-padding cannot splatter the spectrum. */
+    std::atomic<bool> feed_stop{false};
+    std::thread feeder([&] {
+        std::vector<radio::cfloat> block(8192);
+        double phase = 0.0;
+        const double step = 2.0 * 3.14159265358979323846 * offset_hz / kRate;
+        while (!feed_stop.load()) {
+            for (auto& s : block) {
+                s = radio::cfloat{0.35f * static_cast<float>(std::cos(phase)),
+                                  0.35f * static_cast<float>(std::sin(phase))};
+                phase += step;
+                if (phase > 3.14159265358979323846) phase -= 2.0 * 3.14159265358979323846;
+            }
+            r.tx_ring().write(block.data(), block.size());
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        }
+    });
+
+    /* Escalate TX gain only while nothing shows: leakage at minimum gain is
+     * usually enough, but isolation varies by band. 40 dB is still far below
+     * anything that matters without an antenna. */
+    const double gains[] = {r.caps().tx_gain.min, 20.0, 40.0};
+    bool found = false;
+    for (double g : gains) {
+        r.set_tx_gain(g);
+        /* Let the front end settle, then collect fresh samples. */
+        std::this_thread::sleep_for(std::chrono::milliseconds(300));
+        r.rx_ring().clear();
+        std::vector<radio::cfloat> buf(16384), all;
+        all.reserve(65536);
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(4);
+        while (all.size() < 65536 && std::chrono::steady_clock::now() < deadline) {
+            const size_t got = r.rx_ring().read(buf.data(), buf.size());
+            if (got == 0) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(2));
+                continue;
+            }
+            all.insert(all.end(), buf.begin(), buf.begin() + static_cast<ptrdiff_t>(got));
+        }
+        if (all.size() < 16384) continue;
+
+        out = find_tone(all, kRate, 20e3);
+        std::printf("  %.3f MHz, tx gain %.0f dB: peak %+.0f Hz at %.1f dB (noise %.1f dB)\n",
+                    center_hz / 1e6, g, out.freq_hz, out.level_db, out.noise_db);
+        if (out.level_db - out.noise_db > 20.0f) {
+            found = true;
+            break;
+        }
+    }
+
+    feed_stop.store(true);
+    feeder.join();
+    r.stop_rx();
+    r.stop_tx();
+    return found;
+}
+
+}  // namespace
+
+TEST(usrp_hw_tx_tone_lands_on_the_programmed_frequency) {
+    if (!hw_tests_enabled()) return;
+
+    radio::UsrpRadio r;
+    CHECK(open_with_retry(r));
+    if (!r.is_open()) return;
+
+    constexpr double kOffset = 100e3;
+    /* Two centres in licence-free bands, far apart so the LO's divider
+     * ranges both get exercised. */
+    const double centers[] = {433.92e6, 2.45e9};
+
+    for (double c : centers) {
+        TonePeak peak;
+        const bool found = loopback_tone_check(r, c, kOffset, peak);
+        CHECK(found); /* no tone above the floor at any gain: TX chain dead at this band */
+        if (!found) continue;
+
+        /* The bin grid is 61 Hz at this FFT size; 500 Hz of slack covers
+         * windowing spill without ever confusing +100 kHz for anything else. */
+        CHECK(std::fabs(peak.freq_hz - kOffset) < 500.0);
+    }
+
     r.close();
 }

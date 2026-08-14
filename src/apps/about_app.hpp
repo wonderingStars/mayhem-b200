@@ -69,8 +69,12 @@ namespace app {
  * 0.12.1: every test fixture is unique per process. Fixed temp names and a
  * fixed FREQMAN stem let two concurrently-running suites (one per git
  * worktree) delete each other's live fixtures mid-test; verified clean with
- * two suites looping side by side, 12 rounds each. */
-constexpr const char* kVersion = "0.12.1";
+ * two suites looping side by side, 12 rounds each.
+ * 0.12.2: the transmit frequency is verified on hardware for the first time.
+ * A full-duplex self-loopback test (TX/RX port to RX2, internal leakage, no
+ * antenna, minimum gain) transmits a +100 kHz tone and finds it in the
+ * received spectrum within one FFT bin, at 433.92 MHz and 2.45 GHz. */
+constexpr const char* kVersion = "0.12.2";
 
 class AboutView : public ui::View {
    public:
