@@ -401,3 +401,17 @@ out of it ships under the same licence, source included.
 
 You are responsible for what you transmit. Most of the B200's tuning range is
 licensed to somebody.
+
+## Anonymous usage counting
+
+When built with a usage endpoint configured (`core::telemetry::kTelemetryEndpoint`,
+wired to the maintainer's Cloudflare Worker in `analytics-worker/`), the app
+sends **one anonymous ping per day** so the maintainer can see how many people
+run it. The ping contains only a random install id (generated once and stored
+locally in `telemetry_id`), the app version, and the OS name — no personal data,
+no hostname, no location, and the server is told not to log the IP. It runs
+detached with a short timeout and can never block or crash startup.
+
+It is **opt-out**: run with `--no-telemetry` to disable it. Stock builds ship
+with the endpoint unset and therefore send nothing at all until a maintainer
+configures and deploys their own Worker.

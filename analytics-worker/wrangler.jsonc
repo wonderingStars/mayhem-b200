@@ -1,0 +1,17 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+// Cloudflare Worker config for the mayhem-b200 usage counter.
+// Deploy with:  cd analytics-worker && npx wrangler deploy
+// (first run: npx wrangler login)
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "mayhem-b200-usage",
+  "main": "src/index.js",
+  "compatibility_date": "2026-08-01",
+  "observability": { "enabled": true },
+
+  // Analytics Engine: unlimited-cardinality event counting, queried by SQL.
+  // The dataset name is what the SQL queries FROM (see README.md).
+  "analytics_engine_datasets": [
+    { "binding": "USAGE", "dataset": "mayhem_b200_usage" }
+  ]
+}

@@ -6,6 +6,7 @@
  */
 
 #include "apps/about_app.hpp"
+#include "core/telemetry.hpp"
 #include "apps/app_context.hpp"
 #include "apps/event_dispatch.hpp"
 #include "apps/main_menu.hpp"
@@ -80,6 +81,11 @@ struct Options {
      * it serves and the "no authentication, LAN trust boundary" note. */
     bool portal_enabled{false};
     uint16_t portal_port{8090};
+
+    /* Anonymous once-a-day usage ping; on by default, --no-telemetry disables
+     * it. Inert anyway unless the build set core::telemetry::kTelemetryEndpoint.
+     * See src/core/telemetry.hpp. */
+    bool telemetry_enabled{true};
 };
 
 Options parse_args(int argc, char** argv) {
@@ -101,6 +107,8 @@ Options parse_args(int argc, char** argv) {
         } else if (arg.rfind("--portal=", 0) == 0) {
             o.portal_enabled = true;
             o.portal_port = static_cast<uint16_t>(std::atoi(arg.c_str() + 9));
+        } else if (arg == "--no-telemetry") {
+            o.telemetry_enabled = false;
         }
     }
     return o;
@@ -118,6 +126,7 @@ void print_help() {
         "  --scale=<1..6>          Window magnification (default 2)\n"
         "  --list                  List attached USRP devices and exit (uhd only)\n"
         "  --portal[=port]         Serve the JSON web portal API (default port 8090).\n"
+        "  --no-telemetry          Disable the anonymous usage ping (see docs).\n"
         "                          LAN-reachable and unauthenticated. Off unless given.\n"
         "                          It streams the screen and accepts input, so anyone\n"
         "                          who can reach the port can operate this radio,\n"
@@ -241,6 +250,14 @@ int main(int argc, char** argv) {
     system_view.navigation().push_new<app::MainMenuView>();
     system_view.navigation().service();
     system_view.refresh_status();
+
+    /* Anonymous usage ping (opt-out): counts distinct installs, nothing more.
+     * See src/core/telemetry.hpp. Disclosed here so it is never silent. */
+    if (options.telemetry_enabled && core::telemetry::kTelemetryEndpoint[0] != '\0') {
+        std::printf("Anonymous usage ping enabled (random install id only; "
+                    "disable with --no-telemetry).\n");
+    }
+    core::telemetry::ping_on_startup(app::kVersion, options.telemetry_enabled);
 
     /* The portal is pumped from this same thread's main loop below
      * (drain_launch_queue() + refresh(), both UI-thread-only by contract —

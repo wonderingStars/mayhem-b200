@@ -139,7 +139,13 @@ namespace app {
  * and restores on open — so after the first fit it always reopens on your
  * signals, wherever in the world you are. First-ever open still fits to the
  * first marker as before. */
-constexpr const char* kVersion = "0.17.1";
+/* 0.18.0: anonymous, opt-out usage counting. A Cloudflare Worker
+ * (analytics-worker/) counts distinct installs via Analytics Engine; the app
+ * sends one ping a day carrying only a random local install id, the version
+ * and the OS name (no PII, no IP logged), on a detached fail-silent thread,
+ * disableable with --no-telemetry and inert unless the build sets the
+ * endpoint. Disclosed in the README and at startup. */
+constexpr const char* kVersion = "0.18.0";
 
 class AboutView : public ui::View {
    public:
