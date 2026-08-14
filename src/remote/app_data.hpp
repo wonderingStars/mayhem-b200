@@ -102,6 +102,7 @@ enum class PanelKind : uint8_t {
     Screen,
     Image,
     GeoTable,
+    Ais,
 };
 const char* panel_kind_name(PanelKind k);
 
@@ -243,6 +244,79 @@ struct AdsbData {
 };
 JsonValue to_json(const AdsbData& a);
 
+/* ---------------------------------------------------------------------------
+ * AIS panel
+ *
+ * One vessel, as AIS RX's AISRecentEntry already holds it. Same principle as
+ * AdsbAircraft above: nothing here is decoded or re-derived by the portal.
+ * Every value is copied from an entry src/apps/ais_app.cpp filled in and is
+ * formatted by the app's OWN ais::format:: helpers, so the browser and the
+ * 240x320 screen can never tell two different stories about one ship.
+ *
+ * OMIT-WHEN-ABSENT IS THE WHOLE POINT OF THE SHAPE. ITU-R M.1371 gives almost
+ * every field a "not available" encoding, and a transponder sends most of them
+ * most of the time: a vessel heard only through a position report has broadcast
+ * no name, no call sign and no destination, and a class-B unit at a berth
+ * commonly sends 1023 for speed and 511 for heading. None of those are zeros.
+ * A ship with no position fix is not at 0N 0E, one that has not reported a
+ * heading is not pointing due north, and one that has not reported a course is
+ * not steering 000. Each of those absences is a distinct value below, and
+ * to_json() drops the key entirely rather than inventing a number for it.
+ *
+ * `pos_valid` gates BOTH lat and lon together — one flag rather than two
+ * optionals, exactly as AdsbAircraft does it, because a half-published position
+ * is never a legitimate answer. The scalars each carry their own optional (see
+ * MapMarker::heading_deg for the reasoning: an optional cannot be set and then
+ * silently dropped, which a parallel has_* flag could be).
+ * ------------------------------------------------------------------------- */
+struct AisVessel {
+    /* ais::format::mmsi(): nine digits, zero padded. Always present — an
+     * AISRecentEntry only exists because a frame carrying that MMSI passed the
+     * app's length and FCS checks, so it is the one field that cannot be
+     * absent. */
+    std::string mmsi;
+    /* All three already run through ais::format::text(), which strips the '@'
+     * padding AIS uses for unused six-bit characters. Empty = omitted. */
+    std::string name;
+    std::string callsign;
+    std::string destination;
+
+    /* The app's own gate — Latitude/Longitude::is_valid(), which is what
+     * ais::format::latlon() branches on before it will print coordinates.
+     * Degrees, via the app's own ais::format::latlon_float(). */
+    bool pos_valid{false};
+    double lat{0.0};
+    double lon{0.0};
+
+    /* Knots. Raw is tenths of a knot; 1023 is "not available" and 1022 is
+     * ">= 102.2 knots", which is a real reading and is published as 102.2. */
+    std::optional<double> sog_kn{};
+    /* Degrees. Raw is tenths of a degree; 3600 is "not available". */
+    std::optional<double> cog_deg{};
+    /* Degrees. Raw 511 is ITU-R M.1371's "not available" and is also what
+     * AISPosition is constructed with. */
+    std::optional<double> heading_deg{};
+    /* 0..15, ITU-R M.1371 Table 45. The app holds -1 for "no position report
+     * has arrived yet", which is absent rather than "under way w/engine". */
+    std::optional<int32_t> nav_status{};
+
+    /* AISRecentEntry::received_count: frames from this vessel, not fields. */
+    uint32_t msgs{0};
+    /* AISPosition::timestamp, the app's own "YYYY-MM-DD HH:MM:SS" of the last
+     * frame that carried a position. Empty until one does; empty = omitted. */
+    std::string time;
+};
+JsonValue to_json(const AisVessel& v);
+
+/* The whole AIS picture for one poll. `packets_valid` is the decoder's own
+ * count of frames that passed both the length table and the FCS — the P number
+ * the device's own status line shows. */
+struct AisData {
+    std::vector<AisVessel> vessels;
+    uint32_t packets_valid{0};
+};
+JsonValue to_json(const AisData& a);
+
 /* A read-only label/value form (settings-style views). */
 struct FormField {
     std::string label;
@@ -331,6 +405,7 @@ struct PanelData {
     ConsoleData console{};
     MapData map{};
     AdsbData adsb{};
+    AisData ais{};
     FormData form{};
     ScreenData screen{};
     ImageData image{};

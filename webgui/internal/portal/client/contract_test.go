@@ -43,6 +43,11 @@ import (
 // 0.9.0 capture. The other three fixtures still need an app open on real
 // hardware and were left alone.
 //
+// Re-captured again by the same no-radio procedure when the AIS provider moved
+// from panel_kind "geotable" to its own "ais" kind. That one value is the only
+// byte that changed; aprsrx still declares "geotable" and is what keeps the
+// kind covered here.
+//
 // If a change to the C++ side makes one of these fail, that is the test doing
 // its job: fix the mismatch, then re-capture. Do NOT edit the fixture to match
 // a new C++ shape without also confirming the browser still renders — the
@@ -289,8 +294,9 @@ func TestContract_AppsCarryPanelKindForAppsThatHaveAProvider(t *testing.T) {
 	// up wrongly cannot hide behind the others.
 	want := map[string]string{
 		"adsbrx":       "adsb",
+		"ais":          "ais",
 		"pocsag":       "console",
-		"ais":          "geotable",
+		"aprsrx":       "geotable",
 		"noaaapt_rx":   "image",
 		"wardrivemap":  "map",
 		"ert":          "table",

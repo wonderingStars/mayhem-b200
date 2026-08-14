@@ -1,21 +1,29 @@
 /*
- * mayhem-b200 — tests for the web portal's image and geo-table panels
- * (src/remote/app_data.*, provider_apt/wefax/sstv/wardrive/ais/aprs).
+ * mayhem-b200 â€” tests for the web portal's image and geo-table panels
+ * (src/remote/app_data.*, provider_apt/wefax/sstv/wardrive/aprs).
  *
  * Three properties are worth this much test code.
  *
- * ABSENT STAYS ABSENT. A ship that has broadcast no position must appear in the
- * table and NOT on the map; 0N 0E is a real point in the Gulf of Guinea and a
- * browser will happily draw it, measure a range to it and believe it. The same
- * rule covers a heading that was never reported (a marker on heading 000 is a
- * claim the vessel points due north) and a picture that has not been decoded
- * yet (a black rectangle is not "no image", it is a lie that looks like data).
+ * ABSENT STAYS ABSENT. A station that has broadcast no position must appear in
+ * the table and NOT on the map; 0N 0E is a real point in the Gulf of Guinea and
+ * a browser will happily draw it, measure a range to it and believe it. The
+ * same rule covers a heading that was never reported (a marker on heading 000
+ * is a claim the station points due north) and a picture that has not been
+ * decoded yet (a black rectangle is not "no image", it is a lie that looks like
+ * data).
  *
- * THE TABLE HALF DOES NOT MOVE. AIS and APRS were `table` panels and are now
- * `geotable` panels. The whole point of the geotable shape is that the table
+ * THE TABLE HALF DOES NOT MOVE. APRS was a `table` panel and is now a
+ * `geotable` panel. The whole point of the geotable shape is that the table
  * inside it is byte-for-byte what the plain table panel emitted, so the browser
  * and the 240x320 screen keep telling the operator the same story. That is
  * asserted directly against to_json(TableData) rather than by eye.
+ *
+ * AIS used to be the second geotable and is not one any more: it publishes a
+ * dedicated `ais` payload of FIELDS rather than rendered table cells (see
+ * src/remote/provider_ais.cpp). Its half of these properties moved with it, to
+ * tests/test_provider_ais_ble.cpp, where every absence is driven through real
+ * ITU-R M.1371 sentinel bits. What is left here is the one end-to-end check
+ * that the two kinds do not get crossed.
  *
  * REV ONLY MOVES WHEN THE PIXELS DO. Every bump of an image panel's `rev` costs
  * the browser a fresh ~170 kB fetch, so a decoder that has produced nothing
@@ -32,7 +40,6 @@
 
 #include "test_main.hpp"
 
-#include "ais_app.hpp"
 #include "app_context.hpp"
 #include "app_registry.hpp"
 #include "audio_out.hpp"
@@ -68,9 +75,6 @@ ImageData image_data_from_pixels(const std::vector<ui::Color>& pixels,
                                  ImageRevCounter& rev_counter,
                                  std::string app_name,
                                  std::string resolution_note);
-TableData ais_table_data(const app::AISRecentEntries& entries);
-std::vector<GeoTableMarker> ais_geo_markers(const app::AISRecentEntries& entries,
-                                            size_t max_markers);
 TableData aprs_table_data(const app::AprsRecentEntries& entries);
 std::vector<GeoTableMarker> aprs_geo_markers(const app::AprsRecentEntries& entries,
                                              size_t max_markers);
@@ -153,7 +157,7 @@ TEST(rgb565_content_hash_moves_with_the_content_and_not_otherwise) {
 
 TEST(rgb565_expansion_matches_the_displays_own_compositor) {
     /* Display::composite_bgra() replicates the low bits so a full-scale channel
-     * reaches 0xFF. ui::Color::r()/g()/b() do NOT — they leave 0xF8/0xFC — so
+     * reaches 0xFF. ui::Color::r()/g()/b() do NOT â€” they leave 0xF8/0xFC â€” so
      * taking that shortcut here would show the operator a browser picture
      * systematically darker than the device's own screen. */
     const std::vector<uint16_t> px = {
@@ -186,7 +190,7 @@ TEST(image_rev_counter_starts_at_one_so_zero_stays_reserved) {
     ImageRevCounter c;
     CHECK_EQ(c.rev(), 0u);
     /* rev 0 means "nothing decoded yet" on the wire, so the first real frame
-     * has to be 1 — otherwise a decoded picture is indistinguishable from an
+     * has to be 1 â€” otherwise a decoded picture is indistinguishable from an
      * empty one. */
     CHECK_EQ(c.observe(0xABCDEF), 1u);
 }
@@ -297,7 +301,7 @@ TEST(image_payload_omits_the_optional_strings_when_they_are_empty) {
 }
 
 /* ===========================================================================
- * image_data_from_pixels — the shared conversion the three image providers use
+ * image_data_from_pixels â€” the shared conversion the three image providers use
  * ===========================================================================*/
 
 TEST(image_from_a_blank_canvas_is_rev_zero_with_no_pixels) {
@@ -461,192 +465,7 @@ TEST(panel_payload_threads_have_image_rev_only_to_the_image_kind) {
     CHECK_STR_EQ(remote::panel_payload(g, 0).dump(), remote::panel_payload(g, 99).dump());
 }
 
-/* ===========================================================================
- * AIS markers
- * ===========================================================================*/
-
-/* ITU-R M.1371 numbers payload bits MSB-first across the octets, which is what
- * ais::Packet::read() returns. Same builder shape as tests/test_ais.cpp and
- * tests/test_provider_ais_ble.cpp, which keep their own file-static copies. */
-class AisBits {
-   public:
-    void put(uint64_t value, size_t nbits) {
-        for (size_t i = nbits; i > 0; --i)
-            bits_.push_back(static_cast<uint8_t>((value >> (i - 1)) & 1));
-    }
-
-    void put_text(const std::string& s, size_t chars) {
-        for (size_t i = 0; i < chars; i++) {
-            const uint8_t c = (i < s.size()) ? static_cast<uint8_t>(s[i]) : uint8_t{'@'};
-            put(static_cast<uint64_t>(((c - 32) ^ 32) & 0x3F), 6);
-        }
-    }
-
-    size_t bit_count() const { return bits_.size(); }
-
-    std::vector<uint8_t> bytes() const {
-        std::vector<uint8_t> out((bits_.size() + 7) / 8, 0);
-        for (size_t i = 0; i < bits_.size(); i++)
-            if (bits_[i]) out[i / 8] = static_cast<uint8_t>(out[i / 8] | (0x80u >> (i % 8)));
-        return out;
-    }
-
-   private:
-    std::vector<uint8_t> bits_{};
-};
-
-/* Message 1, position report, with the position and heading left to the caller
- * so the "reported" and "not reported" cases are the same code path.
- * `lat_raw`/`lon_raw` are the raw ITU fields in 1/10000 minute, two's
- * complement in 27 and 28 bits respectively. */
-std::vector<uint8_t> ais_position_report(uint32_t mmsi,
-                                         uint32_t lon_raw,
-                                         uint32_t lat_raw,
-                                         uint32_t true_heading) {
-    AisBits b;
-    b.put(1, 6);              /*   0 message id       */
-    b.put(0, 2);              /*   6 repeat           */
-    b.put(mmsi, 30);          /*   8 MMSI             */
-    b.put(0, 4);              /*  38 nav status       */
-    b.put(0, 8);              /*  42 rate of turn     */
-    b.put(74, 10);            /*  50 speed over grnd  */
-    b.put(1, 1);              /*  60 position acc.    */
-    b.put(lon_raw, 28);       /*  61 longitude        */
-    b.put(lat_raw, 27);       /*  89 latitude         */
-    b.put(1234, 12);          /* 116 course over grnd */
-    b.put(true_heading, 9);   /* 128 true heading     */
-    b.put(30, 6);             /* 137 UTC second       */
-    b.put(0, 2);              /* 143 manoeuvre        */
-    b.put(0, 3);              /* 145 spare            */
-    b.put(0, 1);              /* 148 RAIM             */
-    b.put(0x7FFFF, 19);       /* 149 radio status     */
-    CHECK_EQ(b.bit_count(), size_t{168});
-    return b.bytes();
-}
-
-/* Message 5, static and voyage data: a name and a call sign, and no position at
- * all. This is the entry that must reach the table and not the map. */
-std::vector<uint8_t> ais_static_report(uint32_t mmsi,
-                                       const std::string& call_sign,
-                                       const std::string& name) {
-    AisBits b;
-    b.put(5, 6);
-    b.put(0, 2);
-    b.put(mmsi, 30);
-    b.put(0, 2);
-    b.put(9134567, 30);
-    b.put_text(call_sign, 7);
-    b.put_text(name, 20);
-    b.put(70, 8);
-    b.put(90, 9);
-    b.put(30, 9);
-    b.put(10, 6);
-    b.put(10, 6);
-    b.put(1, 4);
-    b.put(5, 4);
-    b.put(17, 5);
-    b.put(9, 5);
-    b.put(30, 6);
-    b.put(64, 8);
-    b.put_text("", 20);
-    b.put(0, 1);
-    b.put(0, 1);
-    CHECK_EQ(b.bit_count(), size_t{424});
-    return b.bytes();
-}
-
-/* The app's own path from a frame to an entry: ui::on_packet() finds or creates
- * by MMSI, then AISRecentEntry::update() applies the fields — the two calls
- * AISAppView::on_packet() makes (ais_app.cpp). */
-void ais_apply(app::AISRecentEntries& entries, const std::vector<uint8_t>& payload) {
-    const ais::Packet packet = ais::Packet::from_bits(ais::build_packet_bits(payload));
-    CHECK(packet.is_valid());
-    auto& entry = ui::on_packet(entries, packet.source_id());
-    entry.update(packet);
-}
-
-/* 51.5 N / 0.12 W in 1/10000 minute: degrees * 600000. The longitude is
- * negative, so it goes on the wire as a 28-bit two's complement field. */
-constexpr uint32_t kLatRaw51_5N = 30900000u;
-constexpr uint32_t kLonRaw0_12W = 268435456u - 72000u;
-
 }  // namespace
-
-TEST(ais_marker_uses_the_apps_own_degrees_conversion) {
-    app::AISRecentEntries entries;
-    ais_apply(entries, ais_position_report(232003812u, kLonRaw0_12W, kLatRaw51_5N, 41u));
-
-    const auto markers = remote::ais_geo_markers(entries, 200);
-    CHECK_EQ(markers.size(), size_t{1});
-    /* ais::format::latlon_float()'s (v*5/3)/1e6, which is what the app feeds its
-     * own ui::GeoMarker. A second conversion written here would be a second
-     * thing to keep in step. */
-    CHECK_NEAR(markers[0].lat, 51.5, 1e-4);
-    CHECK_NEAR(markers[0].lon, -0.12, 1e-4);
-    CHECK(markers[0].heading_deg.has_value());
-    CHECK_NEAR(*markers[0].heading_deg, 41.0, 1e-9);
-    CHECK_STR_EQ(markers[0].kind, "vessel");
-}
-
-TEST(ais_ship_that_has_sent_no_position_is_in_the_table_and_not_on_the_map) {
-    /* A message 5 carries a name and a call sign and no position whatsoever.
-     * AISPosition's default latitude/longitude are the 91/181-degree "not
-     * available" sentinels, which is emphatically not 0N 0E. */
-    app::AISRecentEntries entries;
-    ais_apply(entries, ais_static_report(244660320u, "PBRV", "EVER GIVEN"));
-
-    const TableData t = remote::ais_table_data(entries);
-    CHECK_EQ(t.rows.size(), size_t{1});
-    CHECK_STR_EQ(t.rows[0][1], "EVER GIVEN");
-
-    CHECK_EQ(remote::ais_geo_markers(entries, 200).size(), size_t{0});
-}
-
-TEST(ais_marker_omits_a_heading_the_ship_reported_as_not_available) {
-    /* 511 is ITU-R M.1371's "not available", and the value AISPosition is
-     * constructed with. */
-    app::AISRecentEntries entries;
-    ais_apply(entries, ais_position_report(232003812u, kLonRaw0_12W, kLatRaw51_5N, 511u));
-
-    const auto markers = remote::ais_geo_markers(entries, 200);
-    CHECK_EQ(markers.size(), size_t{1});
-    CHECK(!markers[0].heading_deg.has_value());
-}
-
-TEST(ais_marker_label_is_the_rows_own_name_cell_then_the_mmsi) {
-    app::AISRecentEntries entries;
-    /* Position first, then the static report that names her: the marker and the
-     * table row must name the same ship. */
-    ais_apply(entries, ais_position_report(244660320u, kLonRaw0_12W, kLatRaw51_5N, 41u));
-    ais_apply(entries, ais_static_report(244660320u, "PBRV", "EVER GIVEN"));
-
-    const TableData t = remote::ais_table_data(entries);
-    const auto markers = remote::ais_geo_markers(entries, 200);
-    CHECK_EQ(markers.size(), size_t{1});
-    CHECK_STR_EQ(markers[0].label, "EVER GIVEN");
-    CHECK_STR_EQ(markers[0].label, t.rows[0][1]);
-}
-
-TEST(ais_marker_falls_back_to_the_padded_mmsi_for_an_unnamed_ship) {
-    /* A vessel heard only through a position report has broadcast no name and
-     * no call sign; the MMSI is the entry's own key and can never be absent. */
-    app::AISRecentEntries entries;
-    ais_apply(entries, ais_position_report(1234567u, kLonRaw0_12W, kLatRaw51_5N, 41u));
-
-    const auto markers = remote::ais_geo_markers(entries, 200);
-    CHECK_EQ(markers.size(), size_t{1});
-    CHECK_STR_EQ(markers[0].label, "001234567");
-}
-
-TEST(ais_markers_respect_the_same_ceiling_the_table_does) {
-    app::AISRecentEntries entries;
-    for (uint32_t i = 0; i < 5; i++)
-        ais_apply(entries, ais_position_report(200000000u + i, kLonRaw0_12W, kLatRaw51_5N, 41u));
-
-    /* A marker referring to a row the table never sent would be unreachable
-     * from the browser's table half. */
-    CHECK_EQ(remote::ais_geo_markers(entries, 3).size(), size_t{3});
-}
 
 /* ===========================================================================
  * APRS markers
@@ -714,7 +533,7 @@ TEST(aprs_marker_carries_the_position_the_app_decoded) {
     const auto markers = remote::aprs_geo_markers(entries, 200);
     CHECK_EQ(markers.size(), size_t{1});
     /* 49 deg 03.50' N, 72 deg 01.75' W, already in decimal degrees on
-     * AprsPosition — nothing is converted here. */
+     * AprsPosition â€” nothing is converted here. */
     CHECK_NEAR(markers[0].lat, 49.0 + 3.50 / 60.0, 1e-5);
     CHECK_NEAR(markers[0].lon, -(72.0 + 1.75 / 60.0), 1e-5);
     CHECK_STR_EQ(markers[0].label, "N0CALL");
@@ -791,7 +610,7 @@ TEST(wardrive_marker_label_is_left_empty_when_the_log_had_no_name) {
  * End to end through AppBridge
  *
  * Everything above drives a helper directly, which pins the data rules but
- * never runs a provider — so the part that finds the app in the first place,
+ * never runs a provider â€” so the part that finds the app in the first place,
  * and the app id it registers under, were unexercised. A wrong id is the single
  * most likely way this silently does nothing: the provider never fires, the
  * portal keeps serving its placeholder card, and every assertion above still
@@ -827,7 +646,7 @@ struct BridgeHarness {
     ~BridgeHarness() {
         /* AppBridge is a process-global singleton, so a test that leaves it
          * believing one of these apps is open hands that state to every later
-         * test in the binary — and to every -count= rerun. */
+         * test in the binary â€” and to every -count= rerun. */
         remote::AppBridge::instance().request_home();
         remote::AppBridge::instance().drain_launch_queue();
         nav.service();
@@ -860,7 +679,7 @@ TEST(apt_provider_publishes_an_image_panel_when_the_app_is_open) {
     const std::string p = h.panel();
     CHECK(has(p, "\"app_id\":\"noaaapt_rx\""));
     CHECK(has(p, "\"panel_kind\":\"image\""));
-    /* No device, so no pass decoded: rev 0, no pixels, and an honest note —
+    /* No device, so no pass decoded: rev 0, no pixels, and an honest note â€”
      * never a black 240x232 rectangle dressed up as a satellite image. */
     CHECK(has(p, "\"rev\":0"));
     CHECK(has(p, "\"note\":\"No image decoded yet.\""));
@@ -978,17 +797,23 @@ TEST(wardrive_provider_says_so_honestly_when_the_app_is_not_on_the_stack) {
     CHECK(!has(p, "\"markers\""));
 }
 
-TEST(ais_provider_publishes_a_geotable_with_the_table_it_always_published) {
+TEST(ais_provider_publishes_its_own_kind_and_not_a_geotable) {
+    /* AIS and APRS were the two geotables and shared a renderer; AIS moved to
+     * its own kind and APRS did not. The pair below is what stops that split
+     * from being made in one place and forgotten in the other — a stale
+     * "geotable" here would hand the browser table cells the payload no longer
+     * contains, and the panel would render empty. */
     BridgeHarness h;
     h.launch("ais");
     CHECK_EQ(h.nav.depth(), size_t{2});
 
     const std::string p = h.panel();
     CHECK(has(p, "\"app_id\":\"ais\""));
-    /* Upgraded from "table"; the columns inside are unchanged. */
-    CHECK(has(p, "\"panel_kind\":\"geotable\""));
-    CHECK(has(p, "\"table\":{\"columns\":[\"MMSI\",\"Name/Call\"],\"rows\":[]}"));
-    CHECK(has(p, "\"map\":{\"markers\":[]}"));
+    CHECK(has(p, "\"panel_kind\":\"ais\""));
+    /* No device, so nothing heard. The whole empty payload, verbatim. */
+    CHECK(has(p, "\"data\":{\"vessels\":[],\"stats\":{\"packets_valid\":0}}"));
+    CHECK(!has(p, "\"table\""));
+    CHECK(!has(p, "\"markers\""));
 }
 
 TEST(aprs_provider_publishes_a_geotable_with_the_table_it_always_published) {

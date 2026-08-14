@@ -1,36 +1,39 @@
 /*
  * mayhem-b200 — web portal panel provider for AIS RX.
  *
- * Publishes the ship list AISAppView is already keeping as a generic table
- * panel: the same two columns its RecentEntriesView shows on the 240x320
- * screen, in the same order, with the same per-cell formatting. Every value
- * below is read straight off an AISRecentEntry that src/apps/ais_app.cpp
- * already filled in — the HDLC framing, the FCS check and the ITU-R M.1371
- * field decode all happened long before this file sees an entry — and it is
- * formatted with the app's own ais::format:: helpers rather than re-derived.
+ * Publishes the ship list AISAppView is already keeping. Every value below is
+ * read straight off an AISRecentEntry that src/apps/ais_app.cpp already filled
+ * in — the HDLC framing, the FCS check and the ITU-R M.1371 field decode all
+ * happened long before this file sees an entry — and it is formatted with the
+ * app's own ais::format:: helpers rather than re-derived.
  *
- * The one change to the app is AISAppView::entries(), a const accessor added so
- * this file can read `recent_` without the app having to know the portal
- * exists. It lives here rather than in ais_app.cpp for the same reason:
- * ProviderRegistrar (app_bridge.hpp) self-registers at static-init time, so
- * nothing else has to know this file exists.
+ * The one change to the app is AISAppView::entries()/packets_valid(), const
+ * accessors added so this file can read `recent_` and the decoder's own frame
+ * count without the app having to know the portal exists. This file lives here
+ * rather than in ais_app.cpp for the same reason: ProviderRegistrar
+ * (app_bridge.hpp) self-registers at static-init time, so nothing else has to
+ * know it exists.
  *
- * ONLY the ship list is published. The per-ship detail page
- * (AISRecentEntryDetailView) draws its twelve fields straight to a Painter and
- * keeps no structured form of them, but every one of those fields comes from
- * the same AISRecentEntry, so a richer panel would be a bigger row rather than
- * a second data source. The screen's own list is what the columns follow, and
- * that is what is here.
+ * THE PANEL IS AN `ais` PANEL, NOT A GEOTABLE. It used to be the latter: two
+ * columns of already-rendered text ("MMSI", "Name/Call") plus a marker list,
+ * which is the right shape for a browser that only wants to mirror the 240x320
+ * screen and the wrong one for a browser that wants to sort by speed or draw a
+ * heading rose. The dedicated payload publishes the FIELDS instead — the same
+ * twelve AISRecentEntry fields the device's own detail page (
+ * AISRecentEntryDetailView::paint) draws, from the same entry — and lets the
+ * client lay them out. Nothing about the decode changed; only the shape.
  *
- * THE PANEL IS A GEOTABLE, NOT A PLAIN TABLE. The table half is byte-for-byte
- * what this file published before — same columns, same cells, same order — and
- * the markers are a strict addition beside it. A ship earns a marker ONLY when
- * its stored position passes the app's own validity gate
- * (Latitude/Longitude::is_valid(), which is what ais::format::latlon() branches
- * on before it will print coordinates). A vessel heard only through a message
- * that carries no position, or one broadcasting the 91/181-degree
- * "not available" sentinel, appears in the table and NOT on the map. It is not
- * at 0N 0E.
+ * ABSENT STAYS ABSENT, and on AIS that is most of the payload most of the time.
+ * ITU-R M.1371 gives nearly every field a "not available" encoding and
+ * transponders use them constantly: a vessel heard only through a position
+ * report has broadcast no name, no call sign and no destination (those arrive
+ * in message 5 or 24, which many units send once every six minutes), and one
+ * lying at a berth commonly reports 1023 for speed and 511 for heading. A ship
+ * whose position field carries the 91/181-degree sentinel is NOT at 0N 0E, one
+ * that has not reported a heading is NOT pointing due north, and one that has
+ * sent no position report at all has no navigational status rather than
+ * "under way w/engine" (status 0). Each of those is an omitted key here. Not a
+ * zero, not an empty string, not a placeholder.
  *
  * THREADING: a provider is only ever called from AppBridge::refresh(), i.e.
  * on the UI thread, so walking the view tree and reading the entries list here
@@ -46,50 +49,12 @@
 #include "../apps/app_context.hpp"
 #include "../apps/ui_navigation.hpp"
 
+#include <cstdint>
 #include <string>
 #include <vector>
 
 namespace remote {
 namespace {
-
-/* AISAppView's own columns_ initializer, repeated (src/apps/ais_app.hpp).
- * It cannot be read off the running view — RecentEntriesView resolves the
- * zero-width column against the screen width and then only its private header
- * and table hold the object — so the list is duplicated here and pinned by a
- * test, rather than being free to drift. The widths are the app's declared
- * ones; resolving "Name/Call" to whatever is left on a 240-pixel line is a
- * layout decision TableData does not carry. */
-ui::RecentEntriesColumns ais_columns() {
-    return ui::RecentEntriesColumns{{"MMSI", 9}, {"Name/Call", 0}};
-}
-
-/* One row, laid out to agree cell-for-cell with the line AISAppView's own
- * on_draw paints (ais_app.cpp, recent_entries_view_.table().on_draw).
- *
- * One piece of that line is deliberately not copied, because it is the
- * fixed-width screen's alignment rather than part of any value: the whole line
- * is padded out to the pixel width of the row. A browser table lays its own
- * cells out and would only have to strip it again.
- *
- * Anything a ship has not sent stays empty. A vessel heard only through a
- * position report has broadcast neither its name nor its call sign — those
- * arrive in message 5 or 24, which many transponders send once every six
- * minutes — and its Name/Call cell is blank here exactly as it is on the
- * device. The MMSI is the entry's own key, so it is never absent: an
- * AISRecentEntry only exists because a frame carrying that MMSI passed the
- * length and FCS checks. */
-std::vector<std::string> ais_row(const app::AISRecentEntry& e) {
-    return {
-        ais::format::mmsi(e.mmsi),
-        /* The app's own choice, tested on the RAW name and reproduced exactly:
-         * a vessel that has sent a message 5 whose name field is all '@'
-         * padding has a non-empty `name` that ais::format::text() strips to
-         * nothing, and the device shows an empty cell rather than falling back
-         * to the call sign. Testing the formatted name instead would put a
-         * call sign in the browser that the screen does not show. */
-        e.name.empty() ? ais::format::text(e.call_sign) : ais::format::text(e.name),
-    };
-}
 
 /* The provider is handed nav->top(), which is the GeoMapView whenever the
  * operator has opened a ship's map from the detail page (the detail view
@@ -108,60 +73,104 @@ app::AISAppView* find_ais_view(ui::View& top) {
     return nullptr;
 }
 
+/* One vessel, field for field the same AISRecentEntry the device's detail page
+ * draws — and through the same ais::format:: helpers, so a change to either
+ * formatter moves the browser and the screen together. */
+AisVessel ais_vessel(const app::AISRecentEntry& e) {
+    AisVessel v;
+
+    /* Nine digits, zero padded. Never absent: an AISRecentEntry only exists
+     * because a frame carrying that MMSI passed the length and FCS checks, and
+     * the leading zeros are part of the identity rather than screen padding. */
+    v.mmsi = ais::format::mmsi(e.mmsi);
+
+    /* ais::format::text() strips the '@' padding AIS uses for unused six-bit
+     * characters, so a message 5 with a blank name field formats to "" and the
+     * key is dropped. Note this is NOT the list view's name-or-call-sign
+     * fallback: that rule exists because the screen has one cell for both, and
+     * a payload with two keys has no reason to hide one behind the other. A
+     * transponder that padded its name field and sent a real call sign
+     * publishes a callsign and no name, which is exactly what it broadcast. */
+    v.name = ais::format::text(e.name);
+    v.callsign = ais::format::text(e.call_sign);
+    v.destination = ais::format::text(e.destination);
+
+    const auto& pos = e.last_position;
+
+    /* The app's own gate, not a re-invented one: Latitude/Longitude::is_valid()
+     * is what ais::format::latlon() branches on before it will print
+     * coordinates, and what AISRecentEntryDetailView::update_map_markers()
+     * requires before it will place a marker. Both keys or neither. */
+    v.pos_valid = pos.latitude.is_valid() && pos.longitude.is_valid();
+    if (v.pos_valid) {
+        /* The app's own conversion (ais::format::latlon_float), which is what
+         * feeds the device's ui::GeoMarker. Re-deriving "1/10000 minute to
+         * degrees" here would be a second implementation to keep in step. */
+        v.lat = static_cast<double>(ais::format::latlon_float(pos.latitude.normalized()));
+        v.lon = static_cast<double>(ais::format::latlon_float(pos.longitude.normalized()));
+    }
+
+    /* Speed over ground, tenths of a knot. 1023 is "not available" — the value
+     * AISPosition is constructed with, so every vessel heard only through a
+     * message 5 has it. 1022 means ">= 102.2 knots", which is a real reading
+     * and needs no special case: it divides to 102.2 like any other raw. */
+    if (pos.speed_over_ground != 1023)
+        v.sog_kn = static_cast<double>(pos.speed_over_ground) / 10.0;
+
+    /* Course over ground, tenths of a degree. 3600 is "not available"; above
+     * that the field is out of range, and ais::format::course_over_ground()
+     * prints "invalid" rather than a course. Publishing 400.0 degrees because
+     * the arithmetic happens to work would be inventing a heading the app
+     * itself refuses to show, so the whole >= 3600 range is absent. */
+    if (pos.course_over_ground < 3600)
+        v.cog_deg = static_cast<double>(pos.course_over_ground) / 10.0;
+
+    /* True heading, whole degrees. 511 is ITU-R M.1371's "not available" and
+     * the AISPosition default. The gate is >= 511 rather than the > 359 that
+     * ais::format::true_heading() calls "invalid": >= 511 is what the map
+     * markers this panel replaced already used, and narrowing it here would
+     * silently drop headings the portal has been publishing all along. */
+    if (pos.true_heading < 511) v.heading_deg = static_cast<double>(pos.true_heading);
+
+    /* -1 is the app's "no position report has arrived yet". Status 0 is a real
+     * status ("under way w/engine"), so the two must not collapse. */
+    if (e.navigational_status >= 0)
+        v.nav_status = static_cast<int32_t>(e.navigational_status);
+
+    v.msgs = static_cast<uint32_t>(e.received_count);
+    /* The app's own string, verbatim; empty until a frame carrying a position
+     * arrives, and omitted while it is. */
+    v.time = pos.timestamp;
+
+    return v;
+    /* The app's own string, verbatim; empty until a frame carrying a position
+     * arrives, and omitted while it is. */
+    v.time = pos.timestamp;
+
+    return v;
+}
+
 }  // namespace
 
 /* Exposed rather than left in the anonymous namespace above so that
  * tests/test_provider_ais_ble.cpp can drive it with entries a real
- * AISRecentEntry::update() produced from a real ais::Packet. The formatting is
- * the part that has to keep agreeing with the device screen, and that is only
- * worth asserting against the app's own output. */
-TableData ais_table_data(const app::AISRecentEntries& entries) {
-    return table_data_from_entries(ais_columns(), entries, ais_row);
-}
-
-/* The map half. Exposed for the same reason as ais_table_data(): the rule about
- * which ships do and do not get a marker is the part worth asserting, and it is
- * only worth asserting against entries a real AISRecentEntry::update() built.
+ * AISRecentEntry::update() produced from a real ais::Packet. The formatting and
+ * the omission rules are the parts that have to keep agreeing with the app, and
+ * that is only worth asserting against the app's own output.
  *
- * Nothing here decodes or re-derives a position. The degrees conversion is the
- * app's own ais::format::latlon_float(), which is what AISRecentEntryDetailView
- * feeds its ui::GeoMarker (ais_app.cpp) — re-deriving "1/10000 minute to
- * degrees" here would be a second implementation to keep in step. */
-std::vector<GeoTableMarker> ais_geo_markers(const app::AISRecentEntries& entries,
-                                            size_t max_markers) {
-    std::vector<GeoTableMarker> markers;
+ * The list is emitted in container order, which ui::on_packet() keeps
+ * newest-first: it moves the entry a frame just touched to the front. That is
+ * the order the device's own RecentEntriesView shows, so the browser's first
+ * row and the screen's first row are the same ship. */
+std::vector<AisVessel> ais_vessels(const app::AISRecentEntries& entries, size_t max_vessels) {
+    std::vector<AisVessel> vessels;
     size_t n = 0;
     for (const auto& e : entries) {
-        if (n >= max_markers) break;
+        if (n >= max_vessels) break;
         n++;
-
-        const auto& pos = e.last_position;
-        /* The app's own gate, not a re-invented one. */
-        if (!pos.latitude.is_valid() || !pos.longitude.is_valid()) continue;
-
-        GeoTableMarker mk;
-        mk.lat = static_cast<double>(ais::format::latlon_float(pos.latitude.normalized()));
-        mk.lon = static_cast<double>(ais::format::latlon_float(pos.longitude.normalized()));
-
-        /* The marker has to be identifiable against its own table row, so the
-         * label is that row's Name/Call cell — already '@'-padding-stripped by
-         * ais::format::text() — falling back to the MMSI, which is the entry's
-         * key and can never be absent. (AISRecentEntryDetailView's own GeoMarker
-         * tag uses the RAW call sign, which for a transponder padding the field
-         * with '@' would put "@@@@@@@" on the map.) */
-        const auto row = ais_row(e);
-        mk.label = row[1].empty() ? row[0] : row[1];
-
-        /* 511 is ITU-R M.1371's "not available" for true heading, and it is the
-         * default AISPosition is constructed with; anything at or above it means
-         * the ship has not reported one. Absent, not zero: a marker drawn on a
-         * heading of 000 is a claim the vessel is pointing due north. */
-        if (pos.true_heading < 511) mk.heading_deg = static_cast<double>(pos.true_heading);
-
-        mk.kind = "vessel";
-        markers.push_back(std::move(mk));
+        vessels.push_back(ais_vessel(e));
     }
-    return markers;
+    return vessels;
 }
 
 namespace {
@@ -176,15 +185,18 @@ PanelData ais_panel(ui::View& view) {
         return panel;
     }
 
-    panel.kind = PanelKind::GeoTable;
-    panel.geotable.table = ais_table_data(app_view->entries());
-    /* The same 200-row ceiling table_data_from_entries() applies, so a marker
-     * can never refer to a row the table does not carry. */
-    panel.geotable.markers = ais_geo_markers(app_view->entries(), 200);
+    panel.kind = PanelKind::Ais;
+    /* The same 200-entry ceiling the geotable this replaced applied (it was
+     * table_data_from_entries()' max_rows default, and the marker list was
+     * capped to match so a marker could never refer to a row the table did not
+     * carry). Nothing reaches it today — ui::on_packet() truncates `recent_` to
+     * its own default of 64 — so it is a bound on the wire, not a policy. */
+    panel.ais.vessels = ais_vessels(app_view->entries(), 200);
+    panel.ais.packets_valid = static_cast<uint32_t>(app_view->packets_valid());
     return panel;
 }
 
-const ProviderRegistrar reg_ais{"ais", PanelKind::GeoTable, ais_panel};
+const ProviderRegistrar reg_ais{"ais", PanelKind::Ais, ais_panel};
 
 }  // namespace
 }  // namespace remote
