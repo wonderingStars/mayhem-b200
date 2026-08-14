@@ -76,6 +76,45 @@
   // panel opened at (pxPerDeg 3000).
   const DEFAULT_ZOOM = 12;
 
+  // ---------------------------------------------------------------------------
+  // View persistence
+  //
+  // The map opens centred on 0,0 and only re-centres once the first positioned
+  // marker arrives (fitToMarkers, gated by hasFitted). With sparse signals that
+  // means staring at the null island every open, so the view is remembered in
+  // localStorage and restored on construction -- which works for any operator's
+  // location, no region hardcoded. Storage is best-effort: it throws in private
+  // mode / disabled storage, and an exception here must never break a render.
+  // One key serves every host of this renderer: a single user's geo signals all
+  // sit near one place, so sharing is correct and simpler.
+  // ---------------------------------------------------------------------------
+
+  const VIEW_KEY = "mp-view-map";
+
+  // restoreView returns a stored view when one is present and valid (hasFitted
+  // TRUE so it is honoured, not yanked to the markers), and this file's original
+  // default otherwise (hasFitted FALSE so the first positioned marker still
+  // triggers the initial fit).
+  function restoreView() {
+    try {
+      const raw = window.localStorage.getItem(VIEW_KEY);
+      if (raw) {
+        const v = JSON.parse(raw);
+        if (v && Number.isFinite(v.lat) && Number.isFinite(v.lon) && Number.isFinite(v.zoom)) {
+          return { centerLat: v.lat, centerLon: v.lon, zoom: v.zoom, hasFitted: true };
+        }
+      }
+    } catch (_) { /* private mode / disabled storage / bad JSON */ }
+    return { centerLat: 0, centerLon: 0, zoom: DEFAULT_ZOOM, hasFitted: false };
+  }
+
+  function saveView(st) {
+    try {
+      window.localStorage.setItem(VIEW_KEY,
+        JSON.stringify({ lat: st.centerLat, lon: st.centerLon, zoom: st.zoom }));
+    } catch (_) { /* private mode / quota -- the view simply does not persist */ }
+  }
+
   function worldSize(zoom) { return TILE_SIZE * Math.pow(2, zoom); }
 
   function lonToWorldX(lon, zoom) { return (lon + 180) / 360 * worldSize(zoom); }
@@ -140,6 +179,7 @@
     const cy = st.canvas.clientHeight / 2;
     st.centerLon = worldXToLon(lonToWorldX(anchor.lon, zoom) - (x - cx), zoom);
     st.centerLat = worldYToLat(clamp(latToWorldY(anchor.lat, zoom) - (y - cy), 0, worldSize(zoom)), zoom);
+    saveView(st);
     draw(st);
   }
 
@@ -221,10 +261,7 @@
       tooltip,
       attribEl: attrib,
       offlineEl: offline,
-      centerLat: 0,
-      centerLon: 0,
-      zoom: DEFAULT_ZOOM,
-      hasFitted: false,
+      ...restoreView(),
       markers: [],
       dragging: false,
       dragMoved: false,
@@ -273,7 +310,8 @@
     const endDrag = (ev) => {
       st.dragging = false;
       canvas.classList.remove("mp-dragging");
-      if (!st.dragMoved) handleClick(st, ev);
+      if (st.dragMoved) saveView(st);
+      else handleClick(st, ev);
     };
     canvas.addEventListener("pointerup", endDrag);
     canvas.addEventListener("pointercancel", () => { st.dragging = false; canvas.classList.remove("mp-dragging"); });
@@ -335,6 +373,7 @@
     const h = Math.max(100, st.canvas.clientHeight) * 0.8;
     st.zoom = clamp(Math.log2(Math.min(w / spanX, h / spanY)), ZOOM_MIN, ZOOM_MAX);
     st.hasFitted = true;
+    saveView(st);
   }
 
   // niceStep picks a graticule spacing (degrees) so gridlines land roughly

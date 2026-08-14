@@ -131,7 +131,15 @@ namespace app {
  * and sonde still stream). The browser Morse transmit now keys at a defined
  * conservative gain (default 30 dB, clamped to caps) rather than inheriting
  * whatever a previous app left on the transmitter. */
-constexpr const char* kVersion = "0.17.0";
+/* 0.17.1: the map panels remember where you are. Each map (ADS-B, AIS, and
+ * the shared renderer behind WardriveMap / APRS / EPIRB / Radiosonde) used to
+ * open at 0,0 off Africa and only re-centre once the first positioned marker
+ * arrived, so with sparse fixes you stared at the ocean and panned up every
+ * time. The view (centre + zoom) now persists to localStorage on pan/zoom/fit
+ * and restores on open — so after the first fit it always reopens on your
+ * signals, wherever in the world you are. First-ever open still fits to the
+ * first marker as before. */
+constexpr const char* kVersion = "0.17.1";
 
 class AboutView : public ui::View {
    public:

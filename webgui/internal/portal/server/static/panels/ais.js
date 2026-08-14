@@ -372,6 +372,44 @@ table.mp-ais-table tbody tr.mp-ais-nopos td { color: var(--mp-text-dim, #a09681)
   const DEFAULT_ZOOM = 10;
   const MPP_EQUATOR_Z0 = 156543.03392;
 
+  // ---------------------------------------------------------------------------
+  // View persistence
+  //
+  // The chart opens centred on 0,0 and only re-centres once the first vessel
+  // with a fix arrives (fitTo, gated by hasFitted). With sparse traffic that
+  // means staring at the null island every open, so the view is remembered in
+  // localStorage under its own key and restored on construction -- separate
+  // from the prefs blob above, and working for any operator's location with no
+  // region hardcoded. Storage is best-effort: it throws in private mode /
+  // disabled storage, and an exception here must never break a render.
+  // ---------------------------------------------------------------------------
+
+  const VIEW_KEY = "mp-view-ais";
+
+  // restoreView returns a stored view when one is present and valid (hasFitted
+  // TRUE so it is honoured, not yanked to the vessels), and this file's original
+  // default otherwise (hasFitted FALSE so the first positioned vessel still
+  // triggers the initial fit).
+  function restoreView() {
+    try {
+      const raw = window.localStorage.getItem(VIEW_KEY);
+      if (raw) {
+        const v = JSON.parse(raw);
+        if (v && Number.isFinite(v.lat) && Number.isFinite(v.lon) && Number.isFinite(v.zoom)) {
+          return { centerLat: v.lat, centerLon: v.lon, zoom: v.zoom, hasFitted: true };
+        }
+      }
+    } catch (_) { /* private mode / disabled storage / bad JSON */ }
+    return { centerLat: 0, centerLon: 0, zoom: DEFAULT_ZOOM, hasFitted: false };
+  }
+
+  function saveView(st) {
+    try {
+      window.localStorage.setItem(VIEW_KEY,
+        JSON.stringify({ lat: st.centerLat, lon: st.centerLon, zoom: st.zoom }));
+    } catch (_) { /* private mode / quota -- the view simply does not persist */ }
+  }
+
   function worldSize(zoom) { return TILE_SIZE * Math.pow(2, zoom); }
 
   function lonToWorldX(lon, zoom) { return (lon + 180) / 360 * worldSize(zoom); }
@@ -448,6 +486,7 @@ table.mp-ais-table tbody tr.mp-ais-nopos td { color: var(--mp-text-dim, #a09681)
     const wy = latToWorldY(anchor.lat, zoom) - (y - cy);
     st.centerLon = worldXToLon(wx, zoom);
     st.centerLat = worldYToLat(clamp(wy, 0, worldSize(zoom)), zoom);
+    saveView(st);
     scheduleDraw(st);
   }
 
@@ -485,6 +524,7 @@ table.mp-ais-table tbody tr.mp-ais-nopos td { color: var(--mp-text-dim, #a09681)
     const h = Math.max(120, st.canvas.clientHeight) * 0.82;
     st.zoom = clamp(Math.min(Math.log2(w / Math.max(x1 - x0, 1e-9)),
       Math.log2(h / Math.max(y1 - y0, 1e-9))), ZOOM_MIN, ZOOM_MAX);
+    saveView(st);
     scheduleDraw(st);
     return true;
   }
@@ -1062,15 +1102,12 @@ table.mp-ais-table tbody tr.mp-ais-nopos td { color: var(--mp-text-dim, #a09681)
       headRow,
       emptyEl: empty,
       units: { metric: prefs.metric },
-      centerLat: 0,
-      centerLon: 0,
-      zoom: DEFAULT_ZOOM,
+      ...restoreView(),
       tiles: new Map(),
       tileLoads: 0,
       tileFailures: 0,
       tilesUnavailable: false,
       tileDrawPending: 0,
-      hasFitted: false,
       vessels: [],
       filtered: [],
       trails: new Map(),
@@ -1238,7 +1275,7 @@ table.mp-ais-table tbody tr.mp-ais-nopos td { color: var(--mp-text-dim, #a09681)
     c.addEventListener("pointerup", (ev) => {
       const wasDrag = st.dragMoved;
       endDrag(ev);
-      if (wasDrag) return;
+      if (wasDrag) { saveView(st); return; }
       const rect = c.getBoundingClientRect();
       // Clicking a vessel on the chart selects it, which highlights and scrolls
       // to its row in the table -- the other half of the cross-link.
