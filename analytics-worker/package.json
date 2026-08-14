@@ -1,0 +1,14 @@
+{
+  "name": "mayhem-b200-usage",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Anonymous usage-counter Worker for mayhem-b200 (Analytics Engine).",
+  "scripts": {
+    "deploy": "wrangler deploy",
+    "dev": "wrangler dev",
+    "tail": "wrangler tail"
+  },
+  "devDependencies": {
+    "wrangler": "^4"
+  }
+}

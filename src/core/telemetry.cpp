@@ -25,9 +25,11 @@
 
 namespace core::telemetry {
 
-/* Unset by default: a stock build sends nothing. The maintainer sets this to
- * their own deployed Worker URL (analytics-worker/) to start counting. */
-const char* kTelemetryEndpoint = "";
+/* This project's deployed usage-counter Worker (analytics-worker/). A fork that
+ * wants its own counts sets this to its OWN deployed Worker URL; setting it to
+ * "" makes the build inert (sends nothing, whatever the flags say). Not a
+ * secret — it is a public write-only ping endpoint. */
+const char* kTelemetryEndpoint = "https://mayhem-b200-usage.bondvpn.workers.dev/ping";
 
 namespace {
 

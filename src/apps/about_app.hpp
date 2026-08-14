@@ -145,7 +145,11 @@ namespace app {
  * and the OS name (no PII, no IP logged), on a detached fail-silent thread,
  * disableable with --no-telemetry and inert unless the build sets the
  * endpoint. Disclosed in the README and at startup. */
-constexpr const char* kVersion = "0.18.0";
+/* 0.18.1: the usage-counter Worker is deployed and the endpoint is now wired
+ * to it (mayhem-b200-usage.bondvpn.workers.dev), so builds actually count.
+ * End-to-end verified against the live Worker; README query syntax corrected
+ * (count(DISTINCT index1), not uniq). */
+constexpr const char* kVersion = "0.18.1";
 
 class AboutView : public ui::View {
    public:

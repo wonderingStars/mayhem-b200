@@ -23,12 +23,16 @@ TEST(telemetry_is_a_no_op_when_disabled) {
     CHECK(true); /* reaching here without a throw or hang is the assertion */
 }
 
-TEST(telemetry_is_inert_in_a_stock_build) {
-    /* A build that never set kTelemetryEndpoint sends nothing even when
-     * "enabled": the empty endpoint is the hard gate before any id file,
-     * throttle file or network call is even considered. */
+TEST(telemetry_is_inert_when_endpoint_is_empty) {
+    /* The empty endpoint is the hard gate: with no endpoint, even an "enabled"
+     * ping does nothing — no id file, no throttle file, no network — which is
+     * the guarantee a fork (or a stock build) relies on. This build ships with
+     * a real endpoint, so blank it for the check and restore it after; the
+     * point is that ping_on_startup must not fire when it is empty. */
     CHECK(core::telemetry::kTelemetryEndpoint != nullptr);
-    CHECK(std::string{core::telemetry::kTelemetryEndpoint}.empty());
-    core::telemetry::ping_on_startup("0.0.0-test", true);
-    CHECK(true);
+    const char* saved = core::telemetry::kTelemetryEndpoint;
+    core::telemetry::kTelemetryEndpoint = "";
+    core::telemetry::ping_on_startup("0.0.0-test", true); /* must be a no-op */
+    core::telemetry::kTelemetryEndpoint = saved;
+    CHECK(std::string{core::telemetry::kTelemetryEndpoint}.size() > 0);
 }

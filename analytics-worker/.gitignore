@@ -1,0 +1,5 @@
+# Worker tooling — do not commit installed deps or wrangler state.
+node_modules/
+.wrangler/
+.dev.vars
+*.log
