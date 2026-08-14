@@ -176,6 +176,10 @@ void SondeView::on_packet(const sonde::Packet& packet) {
     /* Reject a bad packet only when the operator asked for it, as upstream. */
     if (use_crc_ && !packet.crc_ok()) return;
 
+    /* Past this line the screen is being written, so the portal has a row to
+     * publish (see packets_shown() in the header). */
+    packets_shown_++;
+
     text_type_.set(packet.type_string());
 
     sonde_id_ = packet.serial_number();  /* also the map marker tag */
@@ -215,6 +219,9 @@ void SondeView::on_packet(const sonde::Packet& packet) {
     }
 
     if (gps_info_.is_valid()) {  /* only update when valid, to prevent flashing */
+        /* The same gate the screen updates behind, so what the portal plots and
+         * what the device draws are the same accepted fix. */
+        fix_ = gps_info_;
         geopos_.set_altitude(static_cast<int32_t>(gps_info_.alt));
         geopos_.set_lat(gps_info_.lat);
         geopos_.set_lon(gps_info_.lon);

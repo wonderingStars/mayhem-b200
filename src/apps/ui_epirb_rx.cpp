@@ -294,13 +294,15 @@ void Location::Angle::clear() {
     float_value_ = 255.0f;
 }
 
+float Location::Angle::degrees_decimal() const {
+    float value = static_cast<float>(degrees);
+    value += static_cast<float>(minutes) / 60.0f;
+    value += static_cast<float>(seconds) / 3600.0f;
+    return orientation ? -value : value;
+}
+
 float Location::Angle::float_value() {
-    if (float_value_ >= 255.0f) {
-        float_value_ = static_cast<float>(degrees);
-        float_value_ += static_cast<float>(minutes) / 60.0f;
-        float_value_ += static_cast<float>(seconds) / 3600.0f;
-        if (orientation) float_value_ = -float_value_;
-    }
+    if (float_value_ >= 255.0f) float_value_ = degrees_decimal();
     return float_value_;
 }
 
@@ -329,6 +331,29 @@ void Location::clear() {
 
 bool Location::is_unknown() const {
     return latitude.degrees >= 255 || longitude.degrees >= 255;
+}
+
+bool Location::is_valid() const {
+    /* Longitude's eight-bit all-ones default, which is also what this class is
+     * constructed with — upstream's own test, kept as the first gate so the
+     * two never disagree about a beacon that carries no position at all. */
+    if (is_unknown()) return false;
+
+    /* Latitude's SEVEN-bit all-ones default, which is is_unknown()'s blind
+     * spot: no protocol can produce 255 here, so 127 is as far as the field
+     * goes and 127 is what "not available" looks like. */
+    if (latitude.degrees >= 127) return false;
+
+    /* And the position has to be one that exists. This is what catches an
+     * apply_offset() borrow that walked an angle out of range, and any
+     * sentinel this file has not thought of: a beacon cannot be at 127 degrees
+     * north whatever bits said so. */
+    const float lat = latitude.degrees_decimal();
+    const float lon = longitude.degrees_decimal();
+    if (!(lat >= -90.0f && lat <= 90.0f)) return false;
+    if (!(lon >= -180.0f && lon <= 180.0f)) return false;
+
+    return true;
 }
 
 std::string Location::maidenhead(float lat, float lon, const int precision) {
@@ -1323,6 +1348,22 @@ void EpirbRxView::on_frame_bits(const std::vector<uint8_t>& bits) {
     auto& entry = ui::on_packet(entries_, beacon_.hex_id, 32);
     entry.count++;
     entry.line = beacon_.summary();
+
+    /* Remember the position for the portal (src/remote/provider_epirb.cpp),
+     * which cannot see beacon_ — it is reused by the next frame. Two gates,
+     * both the app's own: the frame has to have passed its BCH checks (the
+     * position bits live in 41..85 and 107..132, which is exactly what BCH-1
+     * and BCH-2 cover, so an unverified frame's position is an unverified
+     * position), and the location has to be one the beacon really encoded.
+     * Nothing is written when either fails, so a beacon that has never
+     * transmitted a position keeps has_position false rather than gaining a
+     * plausible-looking 0/0. */
+    if (beacon_.frame_valid() && beacon_.location.is_valid()) {
+        entry.has_position = true;
+        entry.latitude = beacon_.location.latitude.degrees_decimal();
+        entry.longitude = beacon_.location.longitude.degrees_decimal();
+    }
+
     table_.set_dirty();
 
     text_detail1_.set(std::string{beacon_.type_name()} + " " + beacon_.protocol_name() + " " +

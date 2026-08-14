@@ -579,11 +579,16 @@ TEST(apps_json_advertises_the_panel_kind_each_provider_registered) {
     const std::string apps = remote::AppBridge::instance().apps_json();
 
     /* One app per distinct panel kind that a provider registers, so a single
-     * kind wired up wrongly cannot hide behind the others. */
+     * kind wired up wrongly cannot hide behind the others — plus the two apps
+     * whose kind CHANGED when they got a map (epirb_rx was "table", radiosonde
+     * had no provider at all), because the badge in the browser's app grid is
+     * drawn from this and nothing else would notice a regression to the old
+     * answer. */
     const std::pair<const char*, const char*> expected[] = {
         {"adsbrx", "adsb"},        {"pocsag", "console"},   {"ais", "geotable"},
         {"noaaapt_rx", "image"},   {"wardrivemap", "map"},  {"ert", "table"},
         {"audio", "receiver"},     {"lookingglass", "spectrum"},
+        {"epirb_rx", "geotable"},  {"radiosonde", "geotable"},
     };
     for (const auto& [id, kind] : expected) {
         const std::string obj = app_object(apps, id);
