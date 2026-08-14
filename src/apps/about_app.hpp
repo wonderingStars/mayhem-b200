@@ -94,7 +94,12 @@ namespace app {
  * a fabricated distress position). The shared map renderer draws the OSM
  * street basemap under its markers (WardriveMap, APRS, and the geotable
  * hosts), true Web Mercator, honest offline degrade to the graticule. */
-constexpr const char* kVersion = "0.14.0";
+/* 0.14.1: leaving an app leaves the radio idle. Navigation stops the
+ * receiver and transmitter centrally when it lands at the menu -- the old
+ * behaviour muted only the speaker while the radio kept streaming into a
+ * demodulator nobody was watching. App-to-app switches do not bounce the
+ * stream. */
+constexpr const char* kVersion = "0.14.1";
 
 class AboutView : public ui::View {
    public:

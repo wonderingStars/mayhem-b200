@@ -7,6 +7,10 @@
 
 #include "ui_navigation.hpp"
 
+#include "app_context.hpp"
+#include "receiver_model.hpp"
+#include "transmitter_model.hpp"
+
 #include "theme.hpp"
 
 namespace ui {
@@ -93,6 +97,25 @@ bool NavigationView::service() {
 
     if (changed) {
         activate_top();
+
+        /* Landing at the root — the menu — means no app is running, and no
+         * app running must mean an idle radio: the handheld this ports stops
+         * its baseband when an app closes, and leaving the B200 streaming
+         * into a demodulator nobody is watching burns USB bandwidth, CPU and
+         * front-end power for nothing (the old behaviour muted only the
+         * SPEAKER, which is how "leave the app" still showed receiving:true
+         * — reported from live use 2026-08-14). The check is where the BATCH
+         * lands, deliberately: an app-to-app switch queues PopToRoot+Push
+         * together and only passes through the root inside this loop, and
+         * stopping there would bounce the radio on every switch. Central,
+         * here, so ninety-odd apps need no edits and a future one cannot
+         * forget. */
+        if (is_root()) {
+            auto& ctx = app::globals();
+            if (ctx.receiver != nullptr && ctx.receiver->running()) ctx.receiver->stop();
+            if (ctx.transmitter != nullptr && ctx.transmitter->running()) ctx.transmitter->stop();
+        }
+
         if (on_view_changed) on_view_changed();
     }
 

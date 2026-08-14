@@ -329,7 +329,9 @@ ScannerView::ScannerView()
 ScannerView::~ScannerView() {
     core::settings().set_string(kSection, "file", freqman_file_);
     core::settings().save();
-    /* Leave the radio streaming for the menu; navigation mutes audio. */
+    /* No receiver stop here on purpose: NavigationView::service() stops the
+     * radio centrally when navigation lands at the menu, and stopping here
+     * too would bounce the stream on every app-to-app switch. */
 }
 
 std::string ScannerView::loaded_filename() const {

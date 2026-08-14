@@ -267,6 +267,15 @@ struct ViewHarness {
 
         auto owned = std::make_unique<app::AdsbRxView>();
         view = owned.get();
+        /* A root spacer below the app, as production always has: main.cpp
+         * installs the menu at the root, so an app is never the root view.
+         * NavigationView::service() stops the radio when a batch lands AT
+         * root -- with the app pushed onto an empty stack it would be the
+         * root, and the harness would exercise a state the shipped binary
+         * cannot reach (found when that stop landed: the receiver died the
+         * moment on_show started it). */
+        nav.push(std::make_unique<ui::View>());
+        nav.service();
         nav.push(std::move(owned));
         nav.service(); /* applies the push, which calls on_show() */
     }
