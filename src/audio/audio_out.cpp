@@ -41,6 +41,8 @@ struct AudioOut::Impl {
 
     std::thread feeder;
     std::atomic<bool> stop{false};
+    /* write() -> feeder handshake for leaving the idle state. */
+    std::atomic<bool> data_pending{false};
 
     /* Signalled by the waveOut callback when a block completes. */
     std::mutex mutex;
@@ -132,6 +134,7 @@ bool AudioOut::start(uint32_t rate, size_t block_frames, size_t block_count) {
     impl_->feeder = std::thread([this] {
         Impl* impl = impl_;
         std::vector<float> scratch(impl->block_frames);
+        size_t consecutive_dry = 0;
 
         while (!impl->stop.load()) {
             /* Wait for a block the device has finished with. */
@@ -143,6 +146,30 @@ bool AudioOut::start(uint32_t rate, size_t block_frames, size_t block_count) {
             }
             if (impl->stop.load()) break;
 
+            /* --- Idle gate -------------------------------------------------
+             *
+             * A decoder app (ERT, ADS-B, POCSAG...) and the menu produce NO
+             * audio, and this loop used to keep the DAC clocking blocks of
+             * digital silence through the speakers anyway — an always-active
+             * audio session, and an audible idle hiss on some outputs. Once
+             * the ring has been empty for a full device-buffer's worth of
+             * consecutive blocks, stop submitting: every header completes,
+             * the device goes quiet, and this thread parks on the condition
+             * variable until write() signals fresh samples. Resume costs one
+             * cv wake. The zero-fill below still handles the ordinary brief
+             * underrun mid-stream — idling is for silence that has clearly
+             * become the steady state, not for a late demod block. */
+            if (idle_.load()) {
+                std::unique_lock<std::mutex> lk{impl->mutex};
+                impl->cv.wait_for(lk, std::chrono::milliseconds(200), [&] {
+                    return impl->stop.load() || impl->data_pending.load();
+                });
+                if (impl->stop.load()) break;
+                if (!impl->data_pending.load()) continue;
+                impl->data_pending.store(false);
+                idle_.store(false);
+            }
+
             for (size_t i = 0; i < impl->headers.size() && !impl->stop.load(); i++) {
                 WAVEHDR& h = impl->headers[i];
                 if ((h.dwFlags & WHDR_DONE) == 0) continue;
@@ -150,7 +177,17 @@ bool AudioOut::start(uint32_t rate, size_t block_frames, size_t block_count) {
                 const size_t got = impl->ring->read(scratch.data(), scratch.size());
                 if (got < scratch.size()) {
                     std::fill(scratch.begin() + got, scratch.end(), 0.0f);
-                    if (got == 0) underruns_.fetch_add(1);
+                    if (got == 0) {
+                        underruns_.fetch_add(1);
+                        if (++consecutive_dry >= impl->headers.size()) {
+                            idle_.store(true);
+                            break; /* let the queued blocks drain and go quiet */
+                        }
+                    } else {
+                        consecutive_dry = 0;
+                    }
+                } else {
+                    consecutive_dry = 0;
                 }
 
                 const float gain = muted_.load()
@@ -206,7 +243,13 @@ void AudioOut::stop() {
 
 size_t AudioOut::write(const float* samples, size_t count) {
     if (impl_ == nullptr || !impl_->ring) return 0;
-    return impl_->ring->write(samples, count);
+    const size_t written = impl_->ring->write(samples, count);
+    if (written > 0 && idle_.load()) {
+        /* Wake the parked feeder; see the idle gate in its loop. */
+        impl_->data_pending.store(true);
+        impl_->cv.notify_all();
+    }
+    return written;
 }
 
 size_t AudioOut::space() const {

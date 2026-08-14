@@ -99,7 +99,12 @@ namespace app {
  * behaviour muted only the speaker while the radio kept streaming into a
  * demodulator nobody was watching. App-to-app switches do not bounce the
  * stream. */
-constexpr const char* kVersion = "0.14.1";
+/* 0.14.2: the audio output goes idle when nothing feeds it. Pure decoder
+ * apps (ERT, ADS-B, POCSAG...) and the menu produce no audio, and the DAC
+ * used to clock digital silence through the speakers forever anyway; the
+ * feeder now parks after a buffer's worth of dry blocks and one write()
+ * wakes it. */
+constexpr const char* kVersion = "0.14.2";
 
 class AboutView : public ui::View {
    public:

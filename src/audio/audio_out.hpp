@@ -57,6 +57,11 @@ class AudioOut {
     float take_peak();
 
     uint32_t underruns() const { return underruns_.load(); }
+
+    /* True while the output has gone quiet because nothing is feeding it —
+     * the device stops clocking silence through the DAC (decoder apps and
+     * the menu produce no audio at all). write() wakes it. */
+    bool idle() const { return idle_.load(); }
     const std::string& last_error() const { return last_error_; }
 
     size_t space() const;
@@ -72,6 +77,7 @@ class AudioOut {
     std::atomic<uint8_t> volume_{40};
     std::atomic<bool> muted_{false};
     std::atomic<uint32_t> underruns_{0};
+    std::atomic<bool> idle_{false};
     std::atomic<float> peak_{0.0f};
     std::string last_error_{};
 };
