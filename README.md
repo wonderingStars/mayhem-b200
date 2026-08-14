@@ -33,6 +33,13 @@ layout, drawn to a host framebuffer.
 | ![Live FM spectrum](docs/screenshots/spectrum-fm.png) | ![ADS-B decoding real aircraft](docs/screenshots/adsb-aircraft.png) | ![FM broadcast receiver](docs/screenshots/fm-radio.png) |
 | **Spectrum** — live FM band off the B200 | **ADS-B** — real aircraft decoded off the air (17 valid frames) | **FM Radio** — WFM broadcast receiver |
 
+**The web portal** — the same apps in a browser, served beside the running
+program (`run-mayhem-b200.cmd`, then <http://127.0.0.1:8081>). Every app is
+reachable remotely, with native HTML panels for the map-based ones (ADS-B, AIS,
+radiosonde, APRS) and live screen streaming for the rest.
+
+![mayhem-b200 web portal — the browser UI listing all apps by category](docs/screenshots/web-portal.png)
+
 ---
 
 ## Download
