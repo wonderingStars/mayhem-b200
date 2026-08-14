@@ -81,7 +81,13 @@ namespace app {
  * A full-duplex self-loopback test (TX/RX port to RX2, internal leakage, no
  * antenna, minimum gain) transmits a +100 kHz tone and finds it in the
  * received spectrum within one FFT bin, at 433.92 MHz and 2.45 GHz. */
-constexpr const char* kVersion = "0.12.3";
+/* 0.13.0: AIS gets an ADS-B-grade vessel chart. A dedicated "ais" panel
+ * kind carries everything the app decodes per ship (name, callsign,
+ * destination, SOG, COG, true heading, nav status, message count), each
+ * field omitted until genuinely received; ais.js draws hull-shaped targets
+ * rotated to heading on OSM water, course/speed vectors, per-MMSI trails,
+ * nav-status colours, and a chart-linked sortable table. */
+constexpr const char* kVersion = "0.13.0";
 
 class AboutView : public ui::View {
    public:
