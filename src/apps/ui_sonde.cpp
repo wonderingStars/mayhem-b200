@@ -101,6 +101,14 @@ SondeView::SondeView()
 
     /* proc_sonde's front end: 2.4576 Msps, tuned to the 402.7 MHz sonde band. */
     receiver_.set_sampling_rate(2457600.0);
+    /* A radiosonde is a ~15 kHz GFSK signal; we capture 2.46 MHz so a sonde
+     * that drifted from its nominal frequency is still in the band, but the
+     * analog filter needs nothing like that width. 800 kHz keeps enormous
+     * headroom for drift (sondes sit within tens of kHz of nominal) while
+     * cutting ~5 dB of noise — the margin a balloon at altitude and range
+     * needs. Deliberately generous rather than tight: a filter that clipped a
+     * drifted sonde would be worse than the noise. Must follow the rate. */
+    receiver_.set_rx_bandwidth_hint(800'000.0);
     receiver_.set_target_frequency(initial_target_frequency);
     /* Nothing here needs audio, and SpectrumAnalysis leaves the wideband tap
      * running while skipping the demodulator and the sound card. */

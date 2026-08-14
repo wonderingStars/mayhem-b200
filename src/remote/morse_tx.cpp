@@ -39,6 +39,7 @@ struct State {
     std::string text;
     uint16_t wpm{18};
     uint64_t freq_hz{0};
+    double gain_db{kMorseTxDefaultGainDb};
 
     bool active{false};
     std::vector<radio::cfloat> iq;   /* stable while active; built before start, cleared after stop */
@@ -84,7 +85,7 @@ void build_envelope(const std::vector<uint8_t>& symbols, uint16_t wpm,
 
 }  // namespace
 
-MorseTxResult morse_tx_request(const std::string& text, uint16_t wpm) {
+MorseTxResult morse_tx_request(const std::string& text, uint16_t wpm, double gain_db) {
     auto& s = state();
     std::lock_guard<std::mutex> lk{s.mu};
 
@@ -114,10 +115,16 @@ MorseTxResult morse_tx_request(const std::string& text, uint16_t wpm) {
     const uint32_t units = app::morse_tx::morse_time_units(symbols);
     const uint64_t duration_ms = static_cast<uint64_t>(units) * app::morse_tx::morse_time_unit_ms(clamped);
 
+    /* A conservative, DEFINED gain rather than whatever a previous app left
+     * on the transmitter — the inherit-an-unknown-gain hazard. Negative means
+     * "use the default"; either way it is clamped to the device's range. */
+    const double requested_gain = (gain_db < 0.0) ? kMorseTxDefaultGainDb : gain_db;
+
     s.pending = true;
     s.text = text;
     s.wpm = clamped;
     s.freq_hz = freq;
+    s.gain_db = ctx.radio->caps().tx_gain.clamp(requested_gain);
 
     return {true, "", duration_ms, freq};
 }
@@ -155,6 +162,7 @@ void morse_tx_tick() {
     if (s.iq.empty()) return;
     s.pos.store(0);
 
+    ctx.radio->set_tx_gain(s.gain_db); /* defined gain, never an inherited one */
     ctx.transmitter->set_mode(radio::TransmitterModel::Mode::Raw);
     ctx.transmitter->set_sampling_rate(kTxRateHz);
     ctx.transmitter->set_target_frequency(s.freq_hz);

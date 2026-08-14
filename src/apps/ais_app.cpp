@@ -857,6 +857,12 @@ void AISAppView::on_show() {
 
     rx->set_mode(radio::ReceiverModel::Mode::SpectrumAnalysis);
     rx->set_sampling_rate(capture_rate_hz);
+    /* AIS is two 25 kHz channels 50 kHz apart; we capture 307 kHz for
+     * timing, but the analog filter only needs to pass the ~50 kHz the
+     * channels occupy. 150 kHz keeps a 3x margin over that while cutting
+     * ~3 dB of noise vs the rate-wide default — marine VHF from a boat near
+     * the horizon needs exactly that margin. Must follow set_sampling_rate. */
+    rx->set_rx_bandwidth_hint(150'000.0);
     rx->set_target_frequency(
         static_cast<uint64_t>(options_channel_.selected_index_value()));
 

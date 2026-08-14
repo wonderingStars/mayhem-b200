@@ -34,8 +34,14 @@ struct MorseTxResult {
 };
 
 /* HTTP thread: validate the request and, on success, queue it. Never touches
- * the transmitter — that is morse_tx_tick's job. wpm is clamped to [5, 60]. */
-MorseTxResult morse_tx_request(const std::string& text, uint16_t wpm);
+ * the transmitter — that is morse_tx_tick's job. wpm is clamped to [5, 60].
+ *
+ * gain_db is the TX gain to key at, clamped to the device's range. A negative
+ * value (the default) means "use the conservative built-in default" rather
+ * than inheriting whatever gain a previous app left on the transmitter — that
+ * inherit-an-unknown-gain hazard is exactly what this parameter removes. */
+constexpr double kMorseTxDefaultGainDb = 30.0;
+MorseTxResult morse_tx_request(const std::string& text, uint16_t wpm, double gain_db = -1.0);
 
 /* UI thread only (AppBridge::refresh): start a queued transmit, and stop one
  * that has finished. A no-op when nothing is queued or in flight. */

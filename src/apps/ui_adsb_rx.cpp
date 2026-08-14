@@ -1334,6 +1334,14 @@ void AdsbRxView::on_show() {
      * attached radio can actually do. */
     receiver_->set_mode(radio::ReceiverModel::Mode::SpectrumAnalysis);
     receiver_->set_sampling_rate(preferred_sampling_rate());
+    /* The 1090 MHz signal is ~2 MHz wide but we sample at up to 8 Msps for
+     * pulse-timing resolution, so the capability default (an analog filter
+     * about as wide as the rate) passes several times the noise bandwidth the
+     * decoder needs. A 4 MHz filter still passes the whole ADS-B pulse
+     * spectrum with margin while cutting ~3 dB of noise at 8 Msps — which is
+     * exactly the margin a weak, distant aircraft's position frames need to
+     * clear CRC. Must follow set_sampling_rate, which clears the hint. */
+    receiver_->set_rx_bandwidth_hint(4'000'000.0);
     receiver_->set_target_frequency(kFrequency);
     if (!receiver_->running()) receiver_->start();
 

@@ -512,9 +512,24 @@ void ReceiverModel::set_wfm_configuration(WfmConfig cfg) {
  * that lands on the attached device and whether the device said enough for the
  * question to be answerable at all — see capability_policy.hpp. */
 void ReceiverModel::apply_rx_bandwidth() {
+    /* An app hint wins over the rate-based default: it means "this signal is
+     * narrower than the rate, filter for it". Clamp to what the device's
+     * analog filter can do, then apply it directly. */
+    if (rx_bandwidth_override_hz_ > 0.0) {
+        const double bw = radio_.caps().rx_bandwidth.clamp(rx_bandwidth_override_hz_);
+        if (bw > 0.0) {
+            radio_.set_rx_bandwidth(bw);
+            return;
+        }
+    }
     rx_bandwidth_choice_ = choose_rx_bandwidth(radio_.caps(), sample_rate_);
     if (rx_bandwidth_choice_.should_apply())
         radio_.set_rx_bandwidth(rx_bandwidth_choice_.bandwidth_hz);
+}
+
+void ReceiverModel::set_rx_bandwidth_hint(double hz) {
+    rx_bandwidth_override_hz_ = (std::isfinite(hz) && hz > 0.0) ? hz : 0.0;
+    apply_rx_bandwidth();
 }
 
 /* Gain is the one front-end control an app hands straight from a UI field to
@@ -550,7 +565,14 @@ void ReceiverModel::set_volume(uint8_t volume_0_99) { audio_.set_volume(volume_0
 uint8_t ReceiverModel::volume() const { return audio_.volume(); }
 
 void ReceiverModel::set_sampling_rate(double hz) {
-    if (hz == sample_rate_) return;
+    /* The bandwidth hint is per-app configuration; clear it whenever the rate
+     * is (re)set so the next app starts from the capability default. An app
+     * that wants a narrow filter re-asserts it after this call. */
+    rx_bandwidth_override_hz_ = 0.0;
+    if (hz == sample_rate_) {
+        apply_rx_bandwidth(); /* reflect a just-cleared override */
+        return;
+    }
 
     const bool was_running = running_.load();
     if (was_running) stop();

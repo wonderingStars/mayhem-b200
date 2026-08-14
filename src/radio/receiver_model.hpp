@@ -338,6 +338,16 @@ class ReceiverModel {
      * why a front end left wide while an app samples narrow folds its
      * neighbours into the passband. */
     void set_sampling_rate(double hz);
+
+    /* An app-specific analog RX filter width, for a signal much narrower than
+     * the sample rate: ADS-B occupies ~2 MHz but samples at 8, so the
+     * capability default (a filter ~= the rate) passes ~4x the noise the
+     * decoder needs. Setting a hint narrows the filter to suit the signal —
+     * ~3 dB less noise into the front end at 4 MHz vs 8 — which recovers weak
+     * distant frames. Cleared by set_sampling_rate, so it is per-app: call it
+     * AFTER setting the rate. Clamped to the device's filter range; 0 (the
+     * default) means "use the rate-based capability default". */
+    void set_rx_bandwidth_hint(double hz);
     double sampling_rate() const { return sample_rate_; }
 
     /* The analog filter width last chosen for the current sample rate, and how
@@ -456,6 +466,7 @@ class ReceiverModel {
     /* Explanations of the last front-end decisions, for the UI and the tests.
      * Written and read on the control thread only. */
     BandwidthChoice rx_bandwidth_choice_{};
+    double rx_bandwidth_override_hz_{0.0}; /* 0 => use the rate-based default */
     GainChoice gain_choice_{};
 
     /* DSP chain — only touched by the DSP thread, or under chain_mutex_. */

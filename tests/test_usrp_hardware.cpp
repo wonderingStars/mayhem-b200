@@ -460,6 +460,13 @@ TEST(usrp_hw_morse_browser_transmit_keys_the_radio) {
         }
         CHECK(remote::morse_tx_active());
 
+        /* The keying uses the conservative DEFAULT gain, not whatever gain was
+         * left on the transmitter (this test set it to min above). The default
+         * is clamped to the device's TX range. */
+        const double want_gain = r.caps().tx_gain.clamp(remote::kMorseTxDefaultGainDb);
+        std::printf("  morse tx gain: %.1f dB (default clamped to %.1f)\n", r.tx_gain(), want_gain);
+        CHECK_NEAR(r.tx_gain(), want_gain, 1.0);
+
         std::this_thread::sleep_for(std::chrono::seconds(2));
         const uint64_t tx_samples = r.stats().tx_samples.load();
         std::printf("  morse tx: %llu samples after 2s (active=%d)\n",

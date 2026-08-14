@@ -122,7 +122,16 @@ namespace app {
  * TX range — so HF CW below the B200's ~70 MHz floor is refused honestly), the
  * keying runs on the UI thread and auto-stops, and the panel carries the
  * licensing warning. Verified on the B200: CW keyed at 144.2 MHz. */
-constexpr const char* kVersion = "0.16.0";
+/* 0.17.0: weak-signal front-end tuning. A per-app RX analog-bandwidth hint
+ * (set_rx_bandwidth_hint, cleared per rate change) narrows the filter to suit
+ * the signal instead of the sample rate: ADS-B 4 MHz (from ~8), AIS 150 kHz
+ * (from 307), radiosonde 800 kHz (from 2.46) — 3-7 dB less noise into the
+ * front end, which recovers the weak distant frames these apps live on.
+ * Verified non-regressive on the B200 (ADS-B still decodes weak aircraft; AIS
+ * and sonde still stream). The browser Morse transmit now keys at a defined
+ * conservative gain (default 30 dB, clamped to caps) rather than inheriting
+ * whatever a previous app left on the transmitter. */
+constexpr const char* kVersion = "0.17.0";
 
 class AboutView : public ui::View {
    public:
