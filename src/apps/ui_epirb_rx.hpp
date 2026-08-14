@@ -120,6 +120,12 @@ class Location {
 
         void clear();
         float float_value();
+        /* The same degrees + minutes/60 + seconds/3600 conversion
+         * float_value() memoizes, computed fresh and without the memo so a
+         * const Location can be asked (float_value() cannot be const: it
+         * caches into float_value_). float_value() is implemented in terms of
+         * this, so there is one conversion, not two. */
+        float degrees_decimal() const;
         /* Applies the PDF-2 offset with sign-based borrow into minutes and
          * degrees, exactly as upstream's apply_offset(). */
         void apply_offset(bool positive, long ofmin, long ofsec);
@@ -135,6 +141,25 @@ class Location {
 
     void clear();
     bool is_unknown() const;
+
+    /* True when both angles hold a position the beacon really encoded.
+     *
+     * This is STRICTER than !is_unknown(), and the difference is the whole
+     * point of it. is_unknown() is upstream's test and looks at one thing:
+     * `degrees >= 255`. Only the longitude field is eight bits wide, so that
+     * catches longitude's all-ones "not available" default and CANNOT catch
+     * latitude's — every protocol parses latitude out of a SEVEN-bit field
+     * (parse_frame(), all four branches), whose not-available default is 127,
+     * which is also what this class is constructed with. A frame that carries
+     * that default alongside a plausible longitude therefore passes
+     * is_unknown() and decodes as 127 degrees north: garbage on the device's
+     * detail line, and a FABRICATED position anywhere it is plotted.
+     *
+     * So: neither sentinel, and the resulting decimal degrees inside the range
+     * a position can occupy — which is also the backstop for a PDF-2 offset
+     * (apply_offset()) that pushed an angle out of range. Nothing here is
+     * decoded or re-derived; it only reads the fields parse_frame() filled. */
+    bool is_valid() const;
 
     static std::string maidenhead(float lat, float lon, int precision = 6);
     std::string to_string(Format format, int precision = 6);
@@ -344,6 +369,24 @@ struct EpirbRecentEntry {
     uint32_t count{0};
     std::string line{};
 
+    /* The last position this beacon's frames genuinely carried, kept so
+     * src/remote/provider_epirb.cpp can put a marker on a map without
+     * re-decoding anything: the Beacon object the view parses into is reused
+     * for the next frame, so by the time a provider runs, the frame this entry
+     * came from is gone.
+     *
+     * has_position is the gate, and it is only ever set from EpirbRxView's own
+     * epirb::Location::is_valid() (see the comment there) on a frame that
+     * passed its BCH checks. A beacon whose protocol carries no position at
+     * all — every short frame, and the user protocols that encode only an
+     * identity — leaves it false forever, and 0/0 then means "never set",
+     * never "the Gulf of Guinea". Once set it is not cleared by a later frame
+     * that carries no position: a distress position that verified once is not
+     * withdrawn because the next burst was corrupt. */
+    bool has_position{false};
+    float latitude{0.0f};
+    float longitude{0.0f};
+
     const Key& key() const { return hex_id; }
 };
 
@@ -366,9 +409,18 @@ class EpirbRxView : public ui::View {
     /* Read-only view of the beacon list, for src/remote/provider_epirb.cpp. */
     const EpirbRecentEntries& entries() const { return entries_; }
 
+    /* The demodulator's frame handler, and the whole of what the view does with
+     * a decoded frame: it is what fills entries_ and, since this app grew a map
+     * panel, what decides whether an entry carries a position at all. Public for
+     * the same reason SondeView::on_packet() is (src/apps/ui_sonde.hpp) — a test
+     * that reproduced these lines instead of calling them could not tell that
+     * the gate had been deleted from the app, and that gate is the difference
+     * between a distress marker and a fabricated one. The demodulation itself is
+     * exercised separately on a synthesised burst in tests/test_epirb_rx.cpp. */
+    void on_frame_bits(const std::vector<uint8_t>& bits);
+
    private:
     void rebuild_front_end();
-    void on_frame_bits(const std::vector<uint8_t>& bits);
 
     radio::ReceiverModel& receiver_;
 

@@ -44,9 +44,10 @@ import (
 // hardware and were left alone.
 //
 // Re-captured again by the same no-radio procedure when the AIS provider moved
-// from panel_kind "geotable" to its own "ais" kind. That one value is the only
-// byte that changed; aprsrx still declares "geotable" and is what keeps the
-// kind covered here.
+// from panel_kind "geotable" to its own "ais" kind, and once more when EPIRB
+// RX (table -> geotable) and Radiosonde (no key -> geotable) were given map
+// panels; the current fixture was captured from the merged build carrying all
+// three changes. aprsrx still declares "geotable" alongside them.
 //
 // If a change to the C++ side makes one of these fail, that is the test doing
 // its job: fix the mismatch, then re-capture. Do NOT edit the fixture to match
@@ -291,7 +292,11 @@ func TestContract_AppsCarryPanelKindForAppsThatHaveAProvider(t *testing.T) {
 	loadFixture(t, "cpp_apps.json", &resp)
 
 	// One app per distinct kind a provider registers, so a single kind wired
-	// up wrongly cannot hide behind the others.
+	// up wrongly cannot hide behind the others — plus the two apps whose kind
+	// CHANGED when they were given a map: epirb_rx published "table" and
+	// radiosonde had no provider at all (no panel_kind key). The browser's app
+	// grid badges tiles from this and nothing else here would notice a
+	// regression to the old answers.
 	want := map[string]string{
 		"adsbrx":       "adsb",
 		"ais":          "ais",
@@ -302,6 +307,8 @@ func TestContract_AppsCarryPanelKindForAppsThatHaveAProvider(t *testing.T) {
 		"ert":          "table",
 		"audio":        "receiver",
 		"lookingglass": "spectrum",
+		"epirb_rx":     "geotable",
+		"radiosonde":   "geotable",
 	}
 	seen := map[string]bool{}
 	for _, a := range resp.Apps {

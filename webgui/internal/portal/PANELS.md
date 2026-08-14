@@ -309,8 +309,8 @@ tooltip.
 
 WardriveMap is the only backend that publishes this kind directly
 (`src/remote/provider_wardrive.cpp`); ADS-B and AIS each have their own richer
-kind, and APRS publishes `geotable`, which mounts this renderer as its upper
-half.
+kind, and APRS, EPIRB RX and Radiosonde RX publish `geotable`, which mounts
+this renderer as its upper half.
 
 #### The C++ backend's marker shape
 
@@ -603,11 +603,11 @@ verified (`panels/adsb.js`'s `drawNow` exists for the same reason).
 
 ### `geotable`
 
-For apps whose entries *are* positions — APRS RX and WardriveMap: the map above
-the table it came from, in one panel. AIS published this kind too until it was
-given the dedicated `ais` kind above; the fixture below keeps its ship-shaped
-sample data, which is still a faithful example of the shape and is what
-`harness.html`'s geotable button loads.
+For apps whose entries *are* positions — APRS RX, EPIRB RX and Radiosonde RX:
+the map above the table it came from, in one panel. AIS published this kind too
+until it was given the dedicated `ais` kind above; the fixture below keeps its
+ship-shaped sample data, which is still a faithful example of the shape and is
+what `harness.html`'s geotable button loads.
 
 ```jsonc
 {
@@ -630,9 +630,32 @@ lands here for free. It strips the two children's card chrome (they are each a f
 That number is the point of the kind. **Markers exist only for entries that have a real
 position fix**; an entry without one is in the table and not on the map. A station
 heard through a status or telemetry packet only, or a vessel that has broadcast its
-name but not its position, is emphatically not at 0°N 0°E — the backend enforces this
-(`provider_aprs.cpp`'s `has_position`, `provider_ais.cpp`'s `latitude.is_valid()`
-gate), and there is no path in `geotable.js` that derives a marker from a table row.
+name but not its position, is emphatically not at 0°N 0°E — the backend enforces this,
+and there is no path in `geotable.js` that derives a marker from a table row.
+
+Each provider's gate is the app's own decode, never a rule invented in the portal:
+
+| app | gate | what has no marker |
+| --- | --- | --- |
+| APRS RX | `AprsRecentEntry::has_position` | a station heard only through a status or telemetry packet |
+| AIS Boats | `Latitude/Longitude::is_valid()` | a vessel that has sent a name but no position report, or the 91/181° sentinel |
+| EPIRB RX | `epirb::Location::is_valid()` on a frame that passed its BCH checks, plus a refusal of the exact origin | a protocol that encodes no position, either "not available" sentinel (255 **and** 127 — see below), a frame that failed BCH, 0°/0° |
+| Radiosonde RX | `sonde::GPS_data::is_valid()` on the fix the app accepted | a sonde whose GPS has not acquired, or whose GPS block failed its CRC |
+
+Two of those are worth spelling out because the obvious gate is the wrong one:
+
+- **EPIRB.** `Location::is_unknown()` — upstream's test — only checks `degrees >= 255`,
+  and only *longitude* is an eight-bit field. Every protocol parses latitude out of a
+  **seven**-bit field whose "not available" default is **127**, so a frame carrying it
+  passes `is_unknown()` and decodes as 127°N. `is_valid()` (`src/apps/ui_epirb_rx.cpp`)
+  rejects both sentinels and range-checks the result; `provider_epirb.cpp` additionally
+  refuses an exact 0°/0°, because C/S encodes "unavailable" as all-ones and never as
+  zero. A beacon plotted where it is not is worse than one not plotted at all.
+- **Radiosonde.** The app's screen position lives in a `ui::GeoPos`, which reads
+  0°/0° until a fix arrives — indistinguishable from a real position. So
+  `provider_sonde.cpp` publishes `SondeView::fix()`, written only inside the app's own
+  `GPS_data::is_valid()` branch (the same branch that moves the device's map marker),
+  and applies that test again to the value it is about to send.
 
 Two adaptations happen between the contract's marker and the one `map.js` draws, and
 they are the only logic in the file:

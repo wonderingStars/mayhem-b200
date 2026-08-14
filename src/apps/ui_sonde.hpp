@@ -63,6 +63,41 @@ class SondeView : public ui::View {
     void on_packet(const sonde::Packet& packet);
     sonde::Decoder& decoder() { return decoder_; }
 
+    /* --- Read-only state, for src/remote/provider_sonde.cpp ------------------
+     *
+     * The view keeps its decoded telemetry in the ui::Text widgets below and
+     * in one sonde::GPS_data, all private; a provider handed a ui::View&
+     * cannot reach any of it. These are const accessors in the style of
+     * AprsTableView::entries() (src/apps/ui_aprs_rx.hpp) and
+     * EpirbRxView::entries(), and nothing outside the app mutates it.
+     *
+     * The text accessors hand back the exact strings on_packet() wrote, so the
+     * browser shows what the operator's screen shows down to the byte — the
+     * app's own formatters, not a second copy of them — including the "..."
+     * every field is constructed with, which is this app's way of saying a
+     * value has not arrived.
+     *
+     * fix() is the one that carries weight. geopos_ reads 0/0 until a position
+     * arrives and cannot tell that state from a sonde over the Gulf of Guinea,
+     * so it is not the gate; this is the last fix on_packet() ACCEPTED — the
+     * one that moved geopos_, the geo URI and the device's map marker, written
+     * only inside on_packet()'s own gps_info_.is_valid() branch. Until then it
+     * is default-constructed, and GPS_data::is_valid() reads that state as "no
+     * fix", which is the app's gate applied to the value being published. */
+    uint32_t packets_shown() const { return packets_shown_; }
+    const sonde::GPS_data& fix() const { return fix_; }
+
+    std::string type_text() const { return text_type_.get(); }
+    std::string id_text() const { return text_serial_.get(); }
+    std::string time_text() const { return text_timestamp_.get(); }
+    std::string voltage_text() const { return text_voltage_.get(); }
+    std::string frame_text() const { return text_frame_.get(); }
+    std::string temperature_text() const { return text_temp_.get(); }
+    std::string humidity_text() const { return text_humid_.get(); }
+    std::string pressure_text() const { return text_press_.get(); }
+    std::string vspeed_text() const { return text_vspeed_.get(); }
+    std::string geo_uri_text() const { return text_geouri_.get(); }
+
    private:
     void update_front_end();
     void update_status();
@@ -86,6 +121,16 @@ class SondeView : public ui::View {
     std::string sonde_id_{};
     sonde::GPS_data gps_info_{};
     sonde::temp_humid temp_humid_info_{};
+
+    /* How many packets on_packet() has actually displayed — packets the
+     * operator's CRC choice let through, which is not the same as the ones the
+     * decoder emitted (decoder_.packets_total()). Zero means every field on
+     * screen is still its "..." placeholder and there is no telemetry to
+     * publish at all. */
+    uint32_t packets_shown_{0};
+    /* The last ACCEPTED fix; see fix() above for why this exists and geopos_
+     * cannot serve instead. */
+    sonde::GPS_data fix_{};
 
     ui::GeoMapView* geomap_view_{nullptr};
     std::time_t last_timestamp_update_{0};

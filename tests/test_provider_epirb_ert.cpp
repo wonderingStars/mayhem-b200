@@ -2,13 +2,20 @@
  * mayhem-b200 — tests for the EPIRB RX and ERT web portal panel providers
  * (src/remote/provider_epirb.cpp, src/remote/provider_ert.cpp).
  *
- * Two things are under test and they fail in different places:
+ * Three things are under test and they fail in different places:
  *
  *   1. The cell formatting. Every row asserted here is produced from a real
  *      epirb::Beacon or a real ert::Packet, so the strings the browser gets are
  *      checked against what the app's own on_draw paints on the 240x320 screen
  *      rather than against a hand-written expectation of it.
- *   2. That the provider fires at all. That half depends on the app id string
+ *   2. The EPIRB panel's MARKER GATE, which is the part of this file that can
+ *      do harm. A distress beacon on a map is the point of the app; a distress
+ *      beacon at a position it never transmitted sends a search to the wrong
+ *      ocean, so every one of those tests builds a real 144-bit frame, checks
+ *      what the decoder made of it, and then asserts what does and does not
+ *      reach the map. The frames that must NOT be plotted outnumber the one
+ *      that must.
+ *   3. That the provider fires at all. That half depends on the app id string
  *      matching the one src/apps/ui_*.cpp registers, and a wrong id fails
  *      silently — the portal just keeps showing the placeholder card. It is
  *      only reachable through AppBridge end to end: request_launch(), drain,
@@ -36,12 +43,15 @@
 #include <string>
 #include <vector>
 
+using remote::GeoTableMarker;
 using remote::TableData;
 
 /* Defined in src/remote/provider_epirb.cpp and src/remote/provider_ert.cpp;
  * see the comments there for why they are not in an anonymous namespace. */
 namespace remote {
 TableData epirb_table_data(const app::EpirbRecentEntries& entries);
+std::vector<GeoTableMarker> epirb_geo_markers(const app::EpirbRecentEntries& entries,
+                                              size_t max_markers);
 TableData ert_table_data(const app::ert::RecentEntries& entries);
 }  // namespace remote
 
@@ -131,13 +141,27 @@ void epirb_build_plb_frame(uint8_t* frame) {
     epirb_finish_frame(frame);
 }
 
-/* The three lines EpirbRxView::on_frame_bits() runs once a frame decodes
- * (src/apps/ui_epirb_rx.cpp), so the entries under test are the ones the app
- * would actually be holding. */
+/* The two lines EpirbRxView::on_frame_bits() runs to fill its table
+ * (src/apps/ui_epirb_rx.cpp), so the CELLS under test are the ones the app
+ * would be holding. Note that it deliberately does NOT reproduce what the app
+ * does with the position: that is the gate the map rests on, and the tests for
+ * it drive the app's own on_frame_bits() rather than a copy of it — a copy
+ * would go on passing after the gate was deleted from the app. */
 void epirb_record(app::EpirbRecentEntries& entries, const app::epirb::Beacon& beacon) {
     auto& entry = ui::on_packet(entries, beacon.hex_id, 32);
     entry.count++;
     entry.line = beacon.summary();
+}
+
+/* The 144 frame bits, MSB first per byte, in the order the demodulator hands
+ * them to EpirbRxView::on_frame_bits() (Beacon::set_frame_bits() reassembles
+ * exactly this). */
+std::vector<uint8_t> epirb_frame_bits(const uint8_t* frame) {
+    std::vector<uint8_t> bits;
+    bits.reserve(app::epirb::kBeaconDataSize * 8);
+    for (size_t i = 0; i < app::epirb::kBeaconDataSize; i++)
+        for (int b = 7; b >= 0; b--) bits.push_back((frame[i] >> b) & 1u);
+    return bits;
 }
 
 /* --- ERT packet construction ----------------------------------------------- */
@@ -228,6 +252,16 @@ struct ProviderHarness {
         nav.service();
     }
 };
+
+/* Opens EPIRB RX and hands back the live view — the same object the provider
+ * will find. Every marker test starts here rather than assembling entries by
+ * hand, so what it asserts about a position is the app's own decision. */
+app::EpirbRxView* open_epirb(ProviderHarness& h) {
+    h.launch("epirb_rx");
+    for (size_t i = 0; i < h.nav.depth(); i++)
+        if (auto* v = dynamic_cast<app::EpirbRxView*>(h.nav.at_depth(i))) return v;
+    return nullptr;
+}
 
 }  // namespace
 
@@ -329,6 +363,253 @@ TEST(epirb_panel_emits_an_empty_cell_for_an_entry_nothing_has_filled_in) {
     CHECK_STR_EQ(t.rows[0][0], "");
 }
 
+/* --- EPIRB RX: the marker gate ----------------------------------------------
+ *
+ * One frame in this section earns a marker. Everything else is a way of NOT
+ * earning one, because that is where the harm is: a beacon plotted where it is
+ * not is worse than a beacon not plotted at all, and the row — locator and all
+ * — reaches the operator either way. */
+
+TEST(epirb_panel_plots_a_beacon_whose_frame_carried_a_position) {
+    /* The same Standard Location PLB the row tests use: France, 43deg 45' N +
+     * a PDF-2 offset of 20 seconds, 1deg 30' E + 8 seconds. Its Maidenhead
+     * locator is already pinned above as JN03ss, so the position under test is
+     * the one the app itself reports. */
+    uint8_t frame[app::epirb::kBeaconDataSize];
+    epirb_build_plb_frame(frame);
+
+    app::epirb::Beacon beacon;
+    beacon.set_frame(frame);
+    CHECK(beacon.frame_valid());
+    CHECK(beacon.location.is_valid());
+
+    ProviderHarness h;
+    app::EpirbRxView* view = open_epirb(h);
+    CHECK(view != nullptr);
+    if (view == nullptr) return;
+    view->on_frame_bits(epirb_frame_bits(frame));
+
+    const auto markers = remote::epirb_geo_markers(view->entries(), 200);
+    CHECK_EQ(markers.size(), size_t{1});
+    if (markers.empty()) return;
+
+    /* 43 + 45/60 + 20/3600 and 1 + 30/60 + 8/3600, which is what the app's own
+     * Angle conversion produces from those fields. */
+    CHECK_NEAR(markers[0].lat, 43.755555, 1e-5);
+    CHECK_NEAR(markers[0].lon, 1.502222, 1e-5);
+    /* The entry's key, whose first four characters open the table's own cell
+     * ("1C6E-PLB-JN03ss[OK]"), so the marker and its row name one beacon. */
+    CHECK_STR_EQ(markers[0].label, "1C6E3DA3AEFFBFF");
+    CHECK_STR_EQ(markers[0].kind, "beacon");
+    /* A 406 MHz frame carries no course. Absent, not 0 — which map.js would
+     * draw as an arrow pointing due north. */
+    CHECK(!markers[0].heading_deg.has_value());
+}
+
+TEST(epirb_panel_keeps_a_beacon_with_no_encoded_position_off_the_map) {
+    /* The longitude sentinel, the same frame the blank-locator row test uses.
+     * Several protocols carry no position by design; this is what they look
+     * like, and the beacon belongs in the table and nowhere else. */
+    uint8_t frame[app::epirb::kBeaconDataSize];
+    epirb_build_plb_frame(frame);
+    epirb_set_bits(frame, 76, 83, 255);
+    epirb_finish_frame(frame);
+
+    app::epirb::Beacon beacon;
+    beacon.set_frame(frame);
+    CHECK(beacon.frame_valid());
+    CHECK(beacon.location.is_unknown());
+    CHECK(!beacon.location.is_valid());
+
+    ProviderHarness h;
+    app::EpirbRxView* view = open_epirb(h);
+    CHECK(view != nullptr);
+    if (view == nullptr) return;
+    view->on_frame_bits(epirb_frame_bits(frame));
+
+    /* Still in the table... */
+    CHECK_EQ(remote::epirb_table_data(view->entries()).rows.size(), size_t{1});
+    /* ...and not on the map, and emphatically not at 0N 0E. */
+    CHECK_EQ(remote::epirb_geo_markers(view->entries(), 200).size(), size_t{0});
+    CHECK(!view->entries().front().has_position);
+}
+
+TEST(epirb_panel_refuses_the_latitude_sentinel_that_is_unknown_cannot_see) {
+    /* THE trap this gate exists for. Latitude is a seven-bit field in every
+     * protocol, so its "not available" default is 127 and never the 255
+     * Location::is_unknown() looks for — a frame carrying it alongside a
+     * plausible longitude passes upstream's test and decodes as 127 degrees
+     * north. On the device that is a garbage detail line; on a map it is a
+     * fabricated distress position. */
+    uint8_t frame[app::epirb::kBeaconDataSize];
+    epirb_build_plb_frame(frame);
+    epirb_set_bits(frame, 66, 72, 127); /* latitude degrees, standard location */
+    epirb_finish_frame(frame);
+
+    app::epirb::Beacon beacon;
+    beacon.set_frame(frame);
+    CHECK(beacon.frame_valid());
+    /* The trap is real: the app's older test says this beacon has a position. */
+    CHECK(!beacon.location.is_unknown());
+    CHECK_EQ(beacon.location.latitude.degrees, 127L);
+    /* And the gate that matters says it does not. */
+    CHECK(!beacon.location.is_valid());
+
+    ProviderHarness h;
+    app::EpirbRxView* view = open_epirb(h);
+    CHECK(view != nullptr);
+    if (view == nullptr) return;
+    view->on_frame_bits(epirb_frame_bits(frame));
+
+    CHECK_EQ(remote::epirb_geo_markers(view->entries(), 200).size(), size_t{0});
+}
+
+TEST(epirb_panel_refuses_a_latitude_no_beacon_can_be_at) {
+    /* Not a sentinel — 100 is simply a number the field can hold — so this is
+     * the range check on its own, which is also what catches a PDF-2 offset
+     * that borrowed an angle out of range. */
+    uint8_t frame[app::epirb::kBeaconDataSize];
+    epirb_build_plb_frame(frame);
+    epirb_set_bits(frame, 66, 72, 100);
+    epirb_finish_frame(frame);
+
+    app::epirb::Beacon beacon;
+    beacon.set_frame(frame);
+    CHECK(beacon.frame_valid());
+    CHECK(!beacon.location.is_unknown());
+    CHECK_EQ(beacon.location.latitude.degrees, 100L);
+    CHECK(!beacon.location.is_valid());
+
+    ProviderHarness h;
+    app::EpirbRxView* view = open_epirb(h);
+    CHECK(view != nullptr);
+    if (view == nullptr) return;
+    view->on_frame_bits(epirb_frame_bits(frame));
+
+    CHECK_EQ(remote::epirb_geo_markers(view->entries(), 200).size(), size_t{0});
+}
+
+TEST(epirb_panel_refuses_the_exact_origin) {
+    /* Every position field and both PDF-2 offsets zeroed. C/S encodes "not
+     * available" as all-ones and never as zero, so this decodes as a genuine
+     * 0N 0E — which the decoder is free to report (is_valid() is about the
+     * protocol, and the beacon really did send zeros) and which the provider
+     * refuses anyway. 700 km south of Accra is where a field read as zeros
+     * lands, not where an emergency beacon is. */
+    uint8_t frame[app::epirb::kBeaconDataSize];
+    epirb_build_plb_frame(frame);
+    epirb_set_bits(frame, 65, 65, 0);   /* N */
+    epirb_set_bits(frame, 66, 72, 0);   /* 0 deg */
+    epirb_set_bits(frame, 73, 74, 0);   /* 0' */
+    epirb_set_bits(frame, 75, 75, 0);   /* E */
+    epirb_set_bits(frame, 76, 83, 0);   /* 0 deg */
+    epirb_set_bits(frame, 84, 85, 0);   /* 0' */
+    epirb_set_bits(frame, 119, 122, 0); /* no latitude seconds offset */
+    epirb_set_bits(frame, 129, 132, 0); /* no longitude seconds offset */
+    epirb_finish_frame(frame);
+
+    app::epirb::Beacon beacon;
+    beacon.set_frame(frame);
+    CHECK(beacon.frame_valid());
+    /* The decoder says this is a position, and it is right to. */
+    CHECK(beacon.location.is_valid());
+    CHECK_NEAR(beacon.location.latitude.degrees_decimal(), 0.0, 1e-6);
+    CHECK_NEAR(beacon.location.longitude.degrees_decimal(), 0.0, 1e-6);
+
+    ProviderHarness h;
+    app::EpirbRxView* view = open_epirb(h);
+    CHECK(view != nullptr);
+    if (view == nullptr) return;
+    view->on_frame_bits(epirb_frame_bits(frame));
+
+    /* So the entry carries it — the layer above is what withholds the marker. */
+    CHECK(view->entries().front().has_position);
+    CHECK_EQ(remote::epirb_table_data(view->entries()).rows.size(), size_t{1});
+    CHECK_EQ(remote::epirb_geo_markers(view->entries(), 200).size(), size_t{0});
+}
+
+TEST(epirb_panel_will_not_plot_a_position_out_of_a_frame_that_failed_its_bch) {
+    /* The position bits (41..85, and the offsets in 107..132) are exactly what
+     * BCH-1 and BCH-2 protect, so a frame that fails them has an unverified
+     * position — and the app shows it as KO. Plotting it would put a search on
+     * a coordinate no beacon transmitted. */
+    uint8_t frame[app::epirb::kBeaconDataSize];
+    epirb_build_plb_frame(frame);
+    /* TWO flipped bits inside the latitude field, and the BCHs are not
+     * recomputed. One would not do it: Beacon::simple_correction() walks bits
+     * 25..85 looking for the single flip that satisfies BCH-1 and accepts the
+     * frame with bch1_corrected set — the app's own decision, and one this gate
+     * deliberately honours (a corrected frame is a verified frame). Two errors
+     * are past what a 21-bit BCH can repair. */
+    frame[8] ^= 0x09;
+
+    app::epirb::Beacon beacon;
+    beacon.set_frame(frame);
+    CHECK(!beacon.frame_valid());
+    /* The location itself still parses — this is the BCH gate doing the work,
+     * not the sentinel one. */
+    CHECK(beacon.location.is_valid());
+
+    ProviderHarness h;
+    app::EpirbRxView* view = open_epirb(h);
+    CHECK(view != nullptr);
+    if (view == nullptr) return;
+    view->on_frame_bits(epirb_frame_bits(frame));
+
+    CHECK(!view->entries().front().has_position);
+    /* The operator still sees the beacon, marked KO, exactly as on the device. */
+    const TableData t = remote::epirb_table_data(view->entries());
+    CHECK_EQ(t.rows.size(), size_t{1});
+    CHECK(t.rows[0][0].find("[KO]") != std::string::npos);
+    CHECK_EQ(remote::epirb_geo_markers(view->entries(), 200).size(), size_t{0});
+}
+
+TEST(epirb_panel_does_not_withdraw_a_verified_position_on_a_later_positionless_frame) {
+    /* Same beacon, two bursts: one that verified a position and one that
+     * carried none. The hex ID masks the position bits out, so both land on one
+     * entry — and the marker has to survive. Withdrawing a distress position
+     * because a later burst was corrupt or came from a protocol that omits it
+     * is exactly the wrong failure direction. */
+    uint8_t with_pos[app::epirb::kBeaconDataSize];
+    epirb_build_plb_frame(with_pos);
+
+    uint8_t no_pos[app::epirb::kBeaconDataSize];
+    epirb_build_plb_frame(no_pos);
+    epirb_set_bits(no_pos, 76, 83, 255);
+    epirb_finish_frame(no_pos);
+
+    app::epirb::Beacon a;
+    a.set_frame(with_pos);
+    app::epirb::Beacon b;
+    b.set_frame(no_pos);
+    CHECK_STR_EQ(a.hex_id, b.hex_id); /* one entry, or this test proves nothing */
+
+    ProviderHarness h;
+    app::EpirbRxView* view = open_epirb(h);
+    CHECK(view != nullptr);
+    if (view == nullptr) return;
+    view->on_frame_bits(epirb_frame_bits(with_pos));
+    view->on_frame_bits(epirb_frame_bits(no_pos));
+
+    const TableData t = remote::epirb_table_data(view->entries());
+    CHECK_EQ(t.rows.size(), size_t{1});
+    /* The newer frame's line wins, as the app writes it... */
+    CHECK_STR_EQ(t.rows[0][0], "1C6E-PLB-      [OK]");
+    /* ...while the position that verified once stays on the map. */
+    const auto markers = remote::epirb_geo_markers(view->entries(), 200);
+    CHECK_EQ(markers.size(), size_t{1});
+    if (!markers.empty()) CHECK_NEAR(markers[0].lat, 43.755555, 1e-5);
+}
+
+TEST(epirb_panel_publishes_no_markers_when_nothing_has_been_heard) {
+    app::EpirbRecentEntries entries;
+    CHECK_EQ(remote::epirb_geo_markers(entries, 200).size(), size_t{0});
+
+    /* And an entry nothing filled in is not a position either. */
+    entries.emplace_back(app::EpirbRecentEntry::Key{"1C6E3DA3AEFFBFF"});
+    CHECK_EQ(remote::epirb_geo_markers(entries, 200).size(), size_t{0});
+}
+
 /* --- ERT: columns and cell formatting -------------------------------------- */
 
 TEST(ert_panel_publishes_the_columns_the_app_shows) {
@@ -424,7 +705,7 @@ TEST(ert_panel_emits_empty_cells_for_a_meter_no_packet_has_filled_in) {
 
 /* --- The providers themselves, end to end ---------------------------------- */
 
-TEST(epirb_panel_provider_publishes_a_table_when_the_app_is_open) {
+TEST(epirb_panel_provider_publishes_a_geotable_when_the_app_is_open) {
     ProviderHarness h;
     /* The id has to be the one src/apps/ui_epirb_rx.cpp registers, or the
      * bridge never reaches the provider at all and the portal silently keeps
@@ -436,10 +717,37 @@ TEST(epirb_panel_provider_publishes_a_table_when_the_app_is_open) {
     const std::string panel = remote::AppBridge::instance().panel_json();
 
     CHECK(json_has(panel, "\"app_id\":\"epirb_rx\""));
-    CHECK(json_has(panel, "\"panel_kind\":\"table\""));
+    /* Upgraded from "table" to "geotable": the table half is unchanged and the
+     * beacon markers are a strict addition beside it, so the columns and rows
+     * assertions below still hold verbatim. */
+    CHECK(json_has(panel, "\"panel_kind\":\"geotable\""));
     CHECK(json_has(panel, "\"columns\":[\"Beacon\"]"));
-    /* No device, so no beacons: an empty rows array, not a fabricated row. */
+    /* No device, so no beacons: an empty rows array, not a fabricated row... */
     CHECK(json_has(panel, "\"rows\":[]"));
+    /* ...and an empty markers array, which is the same claim about the map. */
+    CHECK(json_has(panel, "\"map\":{\"markers\":[]}"));
+}
+
+TEST(epirb_panel_provider_publishes_a_decoded_beacon_through_the_bridge) {
+    ProviderHarness h;
+    app::EpirbRxView* view = open_epirb(h);
+    CHECK(view != nullptr);
+    if (view == nullptr) return;
+
+    uint8_t frame[app::epirb::kBeaconDataSize];
+    epirb_build_plb_frame(frame);
+    view->on_frame_bits(epirb_frame_bits(frame));
+
+    remote::AppBridge::instance().refresh();
+    const std::string panel = remote::AppBridge::instance().panel_json();
+
+    /* The whole hop, not just the adapter: serialized under the keys PANELS.md's
+     * geotable contract names, and reachable at GET /api/panel. */
+    CHECK(json_has(panel, "\"panel_kind\":\"geotable\""));
+    CHECK(json_has(panel, "1C6E-PLB-JN03ss[OK]"));
+    CHECK(json_has(panel, "\"kind\":\"beacon\""));
+    CHECK(json_has(panel, "\"lat\":43.75555"));
+    CHECK(!json_has(panel, "\"markers\":[]"));
 }
 
 TEST(epirb_panel_provider_survives_the_operator_drilling_into_a_sub_view) {
@@ -456,7 +764,7 @@ TEST(epirb_panel_provider_survives_the_operator_drilling_into_a_sub_view) {
     remote::AppBridge::instance().refresh();
     const std::string panel = remote::AppBridge::instance().panel_json();
 
-    CHECK(json_has(panel, "\"panel_kind\":\"table\""));
+    CHECK(json_has(panel, "\"panel_kind\":\"geotable\""));
     CHECK(json_has(panel, "\"columns\":[\"Beacon\"]"));
 }
 
