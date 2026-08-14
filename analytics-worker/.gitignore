@@ -3,3 +3,8 @@ node_modules/
 .wrangler/
 .dev.vars
 *.log
+
+# Never commit an API token, wherever it lands.
+*cf-token*
+*.token
+.mayhem-b200-cf-token

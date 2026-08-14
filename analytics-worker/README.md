@@ -44,7 +44,22 @@ POST https://<worker>/ping
 -> { "ok": true, "counted": true }
 ```
 
-## Querying "how many users"
+## Quick stats (`stats.ps1`)
+
+On Windows, `stats.ps1` prints the whole picture in one command — distinct
+installs, ping volume, and breakdowns by version, OS and day:
+
+```powershell
+pwsh ./stats.ps1            # last 30 days
+pwsh ./stats.ps1 -Days 7
+```
+
+It reads a Cloudflare API token from `$env:CLOUDFLARE_API_TOKEN`, or failing that
+from `$HOME\.mayhem-b200-cf-token`. The token needs only **Account Analytics:
+Read** (add **Workers Scripts: Edit** if you also want it to `wrangler deploy`).
+No token is stored in this repo.
+
+## Querying "how many users" (raw)
 
 Create an API token with **Account Analytics: Read**, then:
 
