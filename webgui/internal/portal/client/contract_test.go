@@ -399,3 +399,53 @@ func TestContract_AppPanelKindSurvivesTheReEncode(t *testing.T) {
 			string(v))
 	}
 }
+
+// Every panel kind's PAYLOAD field names are wire contract, exactly like the
+// envelope above — and they drifted the same way the envelope once did. The
+// spectrum emitter spoke its own dialect (centre_hz/span_hz, no type, no
+// floor/ceil) while spectrum.js read the names PANELS.md documents, so every
+// spectrum panel showed an empty axis reading 0.000 MHz while 1024 real bins
+// flowed underneath — and the harness, whose fixtures were hand-written to
+// the DOCUMENTED shape, rendered beautifully. Both halves green, seam broken.
+// The receiver payload lost its meter the same way (level_db absent).
+//
+// testdata/cpp_panel_<kind>.json are REAL captured backend output (0.12.2+,
+// live B200, one representative app per kind). This test asserts each carries
+// the keys its renderer actually reads. If a C++ change fails this, fix the
+// emission or PANELS.md FIRST, then re-capture — never hand-edit a fixture to
+// match wishes, and never let the harness fixtures be the only shape the JS
+// is tested against, because those are written by hand and prove nothing
+// about the wire.
+func TestContract_PanelPayloadsCarryTheKeysTheirRenderersRead(t *testing.T) {
+	cases := []struct {
+		kind string
+		keys []string // required top-level data keys, per PANELS.md + panels/<kind>.js
+	}{
+		{"spectrum", []string{"type", "center_hz", "sample_rate_hz", "bins_db", "floor_db", "ceil_db"}},
+		{"receiver", []string{"mode", "frequency_hz", "gain_db", "level_db", "level_min_db", "level_max_db", "squelch", "squelch_open", "volume"}},
+		{"console", []string{"lines"}},
+		{"table", []string{"columns", "rows"}},
+		{"map", []string{"markers"}},
+		{"geotable", []string{"map", "table"}},
+		{"image", []string{"rev", "format", "width", "height"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.kind, func(t *testing.T) {
+			var p Panel
+			loadFixture(t, "cpp_panel_"+tc.kind+".json", &p)
+			if p.PanelKind != tc.kind {
+				t.Fatalf("fixture kind = %q, want %q", p.PanelKind, tc.kind)
+			}
+			var payload map[string]json.RawMessage
+			if err := json.Unmarshal(p.Data, &payload); err != nil {
+				t.Fatalf("data not an object: %v", err)
+			}
+			for _, k := range tc.keys {
+				if _, ok := payload[k]; !ok {
+					t.Errorf("%s payload missing %q (renderer reads it); got keys %v",
+						tc.kind, k, keysOf(payload))
+				}
+			}
+		})
+	}
+}

@@ -164,6 +164,11 @@ struct ReceiverData {
     float rf_level_db{-140.0f};
     bool squelch_open{false};
     bool running{false};
+    /* From the attached radio's caps; valid only when a device is open —
+     * absent bounds render the gain control read-only, per PANELS.md. */
+    double gain_min_db{0.0};
+    double gain_max_db{0.0};
+    bool gain_range_valid{false};
 };
 JsonValue to_json(const ReceiverData& r);
 

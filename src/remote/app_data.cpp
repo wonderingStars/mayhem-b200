@@ -224,12 +224,37 @@ JsonValue to_json(const TableData& t) {
 }
 
 JsonValue to_json(const SpectrumData& s) {
+    /* PANELS.md pins this kind to internal/web/spectrum.go's SpectrumFrame
+     * shape — type/center_hz/sample_rate_hz/bins_db/floor_db/ceil_db, and
+     * {type:"idle", reason} when there is nothing to draw. This emitter
+     * originally invented its own dialect (centre_hz/span_hz, no type, no
+     * floor/ceil), the renderer read the documented names, and every
+     * spectrum panel showed an empty axis reading 0.000 MHz while the
+     * harness — whose fixtures were hand-written to the DOCUMENTED shape —
+     * rendered beautifully. Field names are the contract; the fixture for
+     * this kind is now captured from this very function so the two can
+     * never drift silently again (contract_test.go). */
     JsonValue v = JsonValue::object();
-    v.set("centre_hz", JsonValue::integer(static_cast<int64_t>(s.centre_hz)));
-    v.set("span_hz", JsonValue::number(s.span_hz));
+    if (s.bins_db.empty()) {
+        v.set("type", JsonValue::string("idle"));
+        v.set("reason", JsonValue::string("no spectrum yet"));
+        return v;
+    }
+    v.set("type", JsonValue::string("spectrum"));
+    v.set("center_hz", JsonValue::number(static_cast<double>(s.centre_hz)));
+    v.set("sample_rate_hz", JsonValue::number(s.span_hz));
     JsonValue bins = JsonValue::array();
-    for (float b : s.bins_db) bins.push_back(JsonValue::number(static_cast<double>(b)));
+    float floor_db = s.bins_db.front(), ceil_db = s.bins_db.front();
+    for (float b : s.bins_db) {
+        if (b < floor_db) floor_db = b;
+        if (b > ceil_db) ceil_db = b;
+        bins.push_back(JsonValue::number(static_cast<double>(b)));
+    }
     v.set("bins_db", std::move(bins));
+    /* Per-frame min/max, exactly what computeSpectrumBins() hands the web
+     * GUI — render-scale hints, not calibration. */
+    v.set("floor_db", JsonValue::number(static_cast<double>(floor_db)));
+    v.set("ceil_db", JsonValue::number(static_cast<double>(ceil_db)));
     return v;
 }
 
@@ -238,8 +263,24 @@ JsonValue to_json(const ReceiverData& r) {
     v.set("mode", JsonValue::string(r.mode));
     v.set("frequency_hz", JsonValue::integer(static_cast<int64_t>(r.frequency_hz)));
     v.set("gain_db", JsonValue::number(r.gain_db));
+    if (r.gain_range_valid) {
+        v.set("gain_min_db", JsonValue::number(r.gain_min_db));
+        v.set("gain_max_db", JsonValue::number(r.gain_max_db));
+    }
     v.set("squelch", JsonValue::integer(r.squelch));
+    v.set("squelch_min", JsonValue::integer(0));
+    v.set("squelch_max", JsonValue::integer(99)); /* set_squelch_level(level_0_99) */
     v.set("volume", JsonValue::integer(r.volume));
+    v.set("volume_min", JsonValue::integer(0));
+    v.set("volume_max", JsonValue::integer(99)); /* set_volume(volume_0_99) */
+    /* level_db is the name PANELS.md documents and the renderer's meter
+     * reads; it went missing in the same dialect drift the spectrum kind
+     * suffered (the meter sat empty forever). The channel level is the
+     * right quantity: it is what the squelch acts on. The min/max are the
+     * meter's render scale, matching the documented example. */
+    v.set("level_db", JsonValue::number(r.channel_level_db));
+    v.set("level_min_db", JsonValue::number(-100.0));
+    v.set("level_max_db", JsonValue::number(0.0));
     v.set("channel_level_db", JsonValue::number(r.channel_level_db));
     v.set("rf_level_db", JsonValue::number(r.rf_level_db));
     v.set("squelch_open", JsonValue::boolean(r.squelch_open));

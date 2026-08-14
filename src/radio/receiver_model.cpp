@@ -566,6 +566,16 @@ bool ReceiverModel::take_spectrum_samples(std::vector<dsp::cfloat>& out, size_t 
     return true;
 }
 
+bool ReceiverModel::peek_spectrum_samples(std::vector<dsp::cfloat>& out, size_t count) {
+    std::lock_guard<std::mutex> g{spectrum_mutex_};
+    if (!spectrum_filled_once_ || count == 0) return false;
+    if (count > spectrum_buffer_.size()) count = spectrum_buffer_.size();
+
+    out.assign(spectrum_buffer_.end() - static_cast<ptrdiff_t>(count),
+               spectrum_buffer_.end());
+    return true;
+}
+
 bool ReceiverModel::enable_raw_tap(double history_seconds) {
     if (!(history_seconds > 0.0)) history_seconds = RawSampleTap::kDefaultHistorySeconds;
     raw_tap_seconds_ = history_seconds;
@@ -755,6 +765,7 @@ void ReceiverModel::dsp_thread_main() {
             std::copy(raw.data() + (got - n), raw.data() + got,
                       spectrum_buffer_.end() - static_cast<ptrdiff_t>(n));
             spectrum_ready_ = true;
+            spectrum_filled_once_ = true;
         }
 
         /* Gapless tap: the same pre-channel-filter samples, but all of them and

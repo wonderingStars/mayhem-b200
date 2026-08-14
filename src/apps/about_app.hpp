@@ -66,6 +66,13 @@ namespace app {
  * in dB rather than Hz; and the USRP RX thread survives the app-switch race
  * (start-command retry across streamer generations, plus a starvation
  * watchdog that re-kicks a stream the hardware accepted but never fed).
+ * 0.12.3: the spectrum and receiver panel payloads speak the names PANELS.md
+ * documents and the renderers read (center_hz/sample_rate_hz/type/floor_db/
+ * ceil_db; level_db and real gain bounds from caps) -- the old dialect left
+ * every spectrum panel reading 0.000 MHz over live bins. The panel provider
+ * PEEKS the spectrum snapshot instead of consuming it, so it no longer
+ * steals frames from sweeping apps. Golden per-kind payload fixtures pin
+ * every panel kind''s wire shape.
  * 0.12.1: every test fixture is unique per process. Fixed temp names and a
  * fixed FREQMAN stem let two concurrently-running suites (one per git
  * worktree) delete each other's live fixtures mid-test; verified clean with
@@ -74,7 +81,7 @@ namespace app {
  * A full-duplex self-loopback test (TX/RX port to RX2, internal leakage, no
  * antenna, minimum gain) transmits a +100 kHz tone and finds it in the
  * received spectrum within one FFT bin, at 433.92 MHz and 2.45 GHz. */
-constexpr const char* kVersion = "0.12.2";
+constexpr const char* kVersion = "0.12.3";
 
 class AboutView : public ui::View {
    public:

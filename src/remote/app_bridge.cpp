@@ -67,6 +67,17 @@ PanelData receiver_panel(ui::View&) {
     p.receiver.rf_level_db = r->rf_level_db();
     p.receiver.squelch_open = r->squelch_open();
     p.receiver.running = r->running();
+    /* Real bounds from the attached radio, so the gain control can size
+     * itself; Range min==max==0 is this codebase's "unknown" and stays
+     * absent on the wire. */
+    if (app::globals().radio != nullptr) {
+        const auto& g = app::globals().radio->caps().rx_gain;
+        if (g.max > g.min) {
+            p.receiver.gain_min_db = g.min;
+            p.receiver.gain_max_db = g.max;
+            p.receiver.gain_range_valid = true;
+        }
+    }
     return p;
 }
 
@@ -106,7 +117,9 @@ PanelData spectrum_panel(ui::View&) {
     /* take_spectrum_samples() returning false, or fewer samples than the FFT
      * needs, means nothing is ready yet — bins_db is left empty rather than
      * filled with stale or synthesized data. */
-    if (r->take_spectrum_samples(scratch.samples, scratch.fft.size()) &&
+    /* peek, not take: the running app may be a destructive spectrum consumer
+     * (Search, Looking Glass), and this provider must observe, never steal. */
+    if (r->peek_spectrum_samples(scratch.samples, scratch.fft.size()) &&
         scratch.samples.size() >= scratch.fft.size()) {
         scratch.fft.spectrum_db(scratch.samples.data(), scratch.window, scratch.spectrum_db);
         p.spectrum.bins_db.assign(scratch.spectrum_db.begin(), scratch.spectrum_db.end());

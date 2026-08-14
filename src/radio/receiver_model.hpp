@@ -360,6 +360,16 @@ class ReceiverModel {
      * spectrum display. Returns false if none are ready yet. */
     bool take_spectrum_samples(std::vector<dsp::cfloat>& out, size_t count);
 
+    /* Non-destructive read of the same snapshot: copies the newest `count`
+     * samples WITHOUT consuming the ready flag. For observers — the panel
+     * provider serving the browser — that must never steal a frame from the
+     * app the operator is actually running: Search and Looking Glass consume
+     * spectrum through take_spectrum_samples() for their own sweep logic,
+     * and with two destructive readers each saw roughly half the frames
+     * (browser panel flickered spectrum/idle; the app swept at half pace).
+     * Returns false only before the first snapshot ever lands. */
+    bool peek_spectrum_samples(std::vector<dsp::cfloat>& out, size_t count);
+
     /* --- Gapless raw tap ---
      * A second, additive tap on the same pre-channel-filter samples that feed
      * take_spectrum_samples(). That one is a sliding snapshot and loses
@@ -460,6 +470,9 @@ class ReceiverModel {
     std::mutex spectrum_mutex_;
     std::vector<dsp::cfloat> spectrum_buffer_;
     bool spectrum_ready_{false};
+    /* Set once the buffer first fills; peek_spectrum_samples() keys on this
+     * rather than spectrum_ready_, which a destructive reader consumes. */
+    bool spectrum_filled_once_{false};
 
     /* Gapless tap. Deliberately not sharing spectrum_buffer_: the two want
      * opposite things from the same samples. The spectrum tap must keep the

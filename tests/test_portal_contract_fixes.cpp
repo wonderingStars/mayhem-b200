@@ -641,3 +641,81 @@ TEST(app_summary_json_omits_panel_kind_unless_the_app_really_has_one) {
     s.panel_kind = remote::PanelKind::GeoTable;
     CHECK(has(remote::to_json(s).dump(), "\"panel_kind\":\"geotable\""));
 }
+
+/* --- Panel payload field names ARE the contract ------------------------------
+ *
+ * The spectrum panel showed an empty axis reading 0.000 MHz on every machine
+ * while 1024 real bins flowed underneath it: the emitter had invented its own
+ * dialect (centre_hz/span_hz/mode) while the renderer read the names
+ * PANELS.md documents (center_hz/sample_rate_hz/type/floor_db/ceil_db), and
+ * the harness fixtures — hand-written to the DOCUMENTED shape — rendered
+ * beautifully. Both halves green, seam broken: the same failure mode
+ * contract_test.go's header describes for the envelope, one level down.
+ * These pin the C++ emission to the documented names so the dialect cannot
+ * come back. */
+
+TEST(spectrum_payload_speaks_the_documented_dialect) {
+    remote::SpectrumData s;
+    s.centre_hz = 446'000'000;
+    s.span_hz = 2'000'000.0;
+    s.bins_db = {-91.5f, -80.0f, -101.25f};
+
+    const std::string j = remote::to_json(s).dump();
+    CHECK(j.find("\"type\":\"spectrum\"") != std::string::npos);
+    CHECK(j.find("\"center_hz\":") != std::string::npos);
+    CHECK(j.find("\"sample_rate_hz\":") != std::string::npos);
+    CHECK(j.find("\"bins_db\":[") != std::string::npos);
+    /* Per-frame render scale, min and max of the bins actually sent. */
+    CHECK(j.find("\"floor_db\":-101.25") != std::string::npos);
+    CHECK(j.find("\"ceil_db\":-80") != std::string::npos);
+    /* The dialect must be dead, not merely accompanied. */
+    CHECK(j.find("centre_hz") == std::string::npos);
+    CHECK(j.find("span_hz") == std::string::npos);
+}
+
+TEST(spectrum_payload_with_no_bins_is_an_idle_frame) {
+    remote::SpectrumData s;
+    s.centre_hz = 446'000'000;
+    s.span_hz = 2'000'000.0;
+
+    const std::string j = remote::to_json(s).dump();
+    CHECK(j.find("\"type\":\"idle\"") != std::string::npos);
+    CHECK(j.find("\"reason\":") != std::string::npos);
+    /* An idle frame claims nothing it does not have. */
+    CHECK(j.find("center_hz") == std::string::npos);
+    CHECK(j.find("floor_db") == std::string::npos);
+}
+
+TEST(receiver_payload_carries_the_documented_meter_and_bounds) {
+    remote::ReceiverData r;
+    r.mode = "NFM";
+    r.frequency_hz = 446'006'250;
+    r.gain_db = 32.0;
+    r.channel_level_db = -46.5f;
+    r.gain_min_db = 0.0;
+    r.gain_max_db = 76.0;
+    r.gain_range_valid = true;
+
+    const std::string j = remote::to_json(r).dump();
+    /* level_db is what the renderer's meter reads (PANELS.md); its absence
+     * is a meter that sits empty forever. */
+    CHECK(j.find("\"level_db\":-46.5") != std::string::npos);
+    CHECK(j.find("\"level_min_db\":") != std::string::npos);
+    CHECK(j.find("\"level_max_db\":") != std::string::npos);
+    CHECK(j.find("\"gain_min_db\":0") != std::string::npos);
+    CHECK(j.find("\"gain_max_db\":76") != std::string::npos);
+    CHECK(j.find("\"squelch_min\":0") != std::string::npos);
+    CHECK(j.find("\"squelch_max\":99") != std::string::npos);
+    CHECK(j.find("\"volume_max\":99") != std::string::npos);
+}
+
+TEST(receiver_payload_omits_gain_bounds_when_no_device_reported_them) {
+    remote::ReceiverData r;
+    r.mode = "NFM";
+    /* gain_range_valid stays false: Range{0,0} is "unknown" in this
+     * codebase, and absent bounds render the control read-only rather than
+     * inventing a scale. */
+    const std::string j = remote::to_json(r).dump();
+    CHECK(j.find("gain_min_db") == std::string::npos);
+    CHECK(j.find("gain_max_db") == std::string::npos);
+}
