@@ -1106,6 +1106,58 @@ table.mp-table {
   flex: none;
 }
 
+/* Attribution sits above every other overlay this panel draws, the tooltip
+   included: the OSM tile usage policy requires the credit to be visible
+   whenever the tiles are, so nothing is allowed to cover it. map.js shows it
+   only on a frame that actually painted a tile -- an offline graticule owes
+   OpenStreetMap nothing, and crediting it for a map it did not supply would be
+   a false claim about where the picture came from.
+
+   Bottom-RIGHT by convention, which is also the corner the legend (bottom-left)
+   and the zoom keys (top-right) leave free. Full-strength --mp-text rather than
+   the --mp-text-dim the other overlays use: the attribution guidelines ask for
+   easily readable text, and dim at 10px over a pale patch of basemap does not
+   clear AA. */
+.mp-map-attrib {
+  position: absolute;
+  right: var(--mp-sp-5);
+  bottom: var(--mp-sp-5);
+  z-index: 4;
+  background: rgba(11, 10, 8, 0.85);
+  border: 1px solid var(--mp-border);
+  border-radius: var(--mp-radius-sm);
+  padding: var(--mp-sp-1) var(--mp-sp-3);
+  font-family: var(--mp-sans);
+  font-size: var(--mp-fs-xs);
+  color: var(--mp-text);
+}
+
+.mp-map-attrib a {
+  color: inherit;
+  text-decoration: none;
+}
+
+.mp-map-attrib a:hover {
+  text-decoration: underline;
+}
+
+/* The whole of the "no basemap" report: one quiet line in the same corner,
+   dimmer than the attribution because it is a note about the map rather than
+   part of it. An air-gapped portal is a normal operating case, not a fault. */
+.mp-map-offline {
+  position: absolute;
+  right: var(--mp-sp-5);
+  bottom: var(--mp-sp-5);
+  z-index: 4;
+  background: rgba(11, 10, 8, 0.85);
+  border: 1px solid var(--mp-border);
+  border-radius: var(--mp-radius-sm);
+  padding: var(--mp-sp-1) var(--mp-sp-3);
+  font-family: var(--mp-sans);
+  font-size: var(--mp-fs-xs);
+  color: var(--mp-text-dim);
+}
+
 .mp-map-tooltip {
   position: absolute;
   pointer-events: none;
