@@ -95,12 +95,12 @@ Flags:
 
 `cmd/panels-harness`, the dev-only static server for the panel renderers,
 accepts the same three `-tiles` flags and mounts the identical route, so the
-ADS-B map can be verified against real coastlines without running the whole
+map panels can be verified against real coastlines without running the whole
 portal.
 
 ### The basemap tile proxy
 
-The ADS-B panel's map is drawn in **Web Mercator (EPSG:3857)** — the
+The map panels' basemap is drawn in **Web Mercator (EPSG:3857)** — the
 projection OpenStreetMap tiles are rendered in. That is not a cosmetic
 choice: overlaying Mercator tiles on an equirectangular plot misplaces every
 aircraft vertically, by kilometres at UK latitudes over a one-degree span.

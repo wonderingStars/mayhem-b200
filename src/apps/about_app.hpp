@@ -87,7 +87,14 @@ namespace app {
  * field omitted until genuinely received; ais.js draws hull-shaped targets
  * rotated to heading on OSM water, course/speed vectors, per-MMSI trails,
  * nav-status colours, and a chart-linked sortable table. */
-constexpr const char* kVersion = "0.13.0";
+/* 0.14.0: every geo-capable app has a map. Radiosonde RX gains its first
+ * panel and EPIRB RX upgrades from table to geotable — both with hard
+ * validity gates (EPIRB additionally fixes upstream's is_unknown() blind
+ * spot: the 7-bit latitude "not available" sentinel decoded as 127 deg N,
+ * a fabricated distress position). The shared map renderer draws the OSM
+ * street basemap under its markers (WardriveMap, APRS, and the geotable
+ * hosts), true Web Mercator, honest offline degrade to the graticule. */
+constexpr const char* kVersion = "0.14.0";
 
 class AboutView : public ui::View {
    public:
