@@ -464,6 +464,12 @@ class AISAppView : public ui::View {
      * Same idiom as AprsTableView::entries() (ui_aprs_rx.hpp). */
     const AISRecentEntries& entries() const { return recent_; }
 
+    /* Frames that passed both the length table and the FCS — the same number
+     * update_status() paints as "P<n>" on the device's own status line, read
+     * off the same decoder rather than counted a second time here. Exposed for
+     * the same reason and with the same const-by-design rule as entries(). */
+    size_t packets_valid() const { return decoder_.packets_valid(); }
+
    private:
     void on_packet(const ais::Packet& packet);
     void on_show_list();

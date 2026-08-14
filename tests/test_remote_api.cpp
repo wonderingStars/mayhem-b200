@@ -181,7 +181,7 @@ TEST(panel_payload_covers_every_kind) {
         PanelKind::Table, PanelKind::Spectrum, PanelKind::Receiver,
         PanelKind::Console, PanelKind::Map, PanelKind::Adsb,
         PanelKind::Form, PanelKind::Screen, PanelKind::Image,
-        PanelKind::GeoTable,
+        PanelKind::GeoTable, PanelKind::Ais,
     };
     for (const auto k : kinds) {
         remote::PanelData p;
@@ -299,6 +299,149 @@ TEST(adsb_is_the_only_kind_serialized_when_active) {
     CHECK(json.find("\"adsb\":{") != std::string::npos);
     CHECK(json.find("should not appear") == std::string::npos);
     CHECK(json.find("neither should this") == std::string::npos);
+}
+
+/* --- AIS panel -------------------------------------------------------------
+ *
+ * Same load-bearing property as the ADS-B payload above, and a harder one to
+ * hold: ITU-R M.1371 gives nearly every AIS field a "not available" encoding
+ * and transponders use them constantly, so on a real channel most of this
+ * payload is absent most of the time. A vessel with no position fix must not
+ * appear at 0N 0E, one that has not reported a heading must not read as
+ * pointing due north, and one that has sent no position report at all must not
+ * read as "under way w/engine" (navigational status 0).
+ *
+ * The mirror rule matters exactly as much and is tested alongside: a zero a
+ * vessel really did broadcast is a value, not an absence. A ship at anchor
+ * reporting 0.0 knots on course 000 must publish those numbers.
+ *
+ * These drive to_json() directly, so they pin the serializer's omission rules
+ * alone. Which raw sentinel maps to which absence is the provider's half and
+ * is pinned in test_provider_ais_ble.cpp against real ais::Packet bytes. */
+
+TEST(ais_panel_omits_every_field_a_vessel_has_not_broadcast) {
+    remote::PanelData p;
+    p.kind = PanelKind::Ais;
+
+    remote::AisVessel v;
+    v.mmsi = "232003812";
+    v.msgs = 3;
+    /* Everything else left as constructed: a vessel heard only through a
+     * position report whose every optional field carried its sentinel. */
+    p.ais.vessels.push_back(v);
+
+    const std::string json = remote::to_json(p).dump();
+    CHECK(json.find("\"kind\":\"ais\"") != std::string::npos);
+    CHECK(json.find("\"mmsi\":\"232003812\"") != std::string::npos);
+    /* The MMSI and the frame count are the only two keys that are always
+     * meaningful, so the whole vessel object is exactly those two. */
+    CHECK(json.find("{\"mmsi\":\"232003812\",\"msgs\":3}") != std::string::npos);
+    CHECK(json.find("\"name\"") == std::string::npos);
+    CHECK(json.find("\"callsign\"") == std::string::npos);
+    CHECK(json.find("\"destination\"") == std::string::npos);
+    CHECK(json.find("\"lat\"") == std::string::npos);
+    CHECK(json.find("\"lon\"") == std::string::npos);
+    CHECK(json.find("\"sog_kn\"") == std::string::npos);
+    CHECK(json.find("\"cog_deg\"") == std::string::npos);
+    CHECK(json.find("\"heading_deg\"") == std::string::npos);
+    CHECK(json.find("\"nav_status\"") == std::string::npos);
+    CHECK(json.find("\"time\"") == std::string::npos);
+    /* No has_pos companion either: on this payload the key's presence IS the
+     * answer, and a false flag beside an absent position would be a second
+     * spelling of the same fact for the browser to disagree with. */
+    CHECK(json.find("\"has_pos\"") == std::string::npos);
+    /* The counter is published even with nothing decoded. */
+    CHECK(json.find("\"stats\":{\"packets_valid\":0}") != std::string::npos);
+}
+
+TEST(ais_panel_emits_every_field_once_received) {
+    remote::PanelData p;
+    p.kind = PanelKind::Ais;
+
+    remote::AisVessel v;
+    v.mmsi = "244660320";
+    v.name = "EVER GIVEN";
+    v.callsign = "PBRV";
+    v.destination = "ROTTERDAM";
+    v.pos_valid = true;
+    v.lat = 51.5;
+    v.lon = -0.25;
+    v.sog_kn = 7.4;
+    v.cog_deg = 123.4;
+    v.heading_deg = 41.0;
+    v.nav_status = 5;
+    v.msgs = 12;
+    v.time = "2026-08-14 09:31:07";
+    p.ais.vessels.push_back(v);
+    p.ais.packets_valid = 918;
+
+    /* The whole object, in order, rather than a key at a time: the key set and
+     * the ordering are the wire contract the browser is written against. */
+    CHECK(remote::panel_payload(p).dump() ==
+          "{\"vessels\":[{\"mmsi\":\"244660320\",\"name\":\"EVER GIVEN\","
+          "\"callsign\":\"PBRV\",\"destination\":\"ROTTERDAM\","
+          "\"lat\":51.5,\"lon\":-0.25,\"sog_kn\":7.4,\"cog_deg\":123.4,"
+          "\"heading_deg\":41,\"nav_status\":5,\"msgs\":12,"
+          "\"time\":\"2026-08-14 09:31:07\"}],"
+          "\"stats\":{\"packets_valid\":918}}");
+}
+
+TEST(ais_panel_publishes_both_coordinates_or_neither) {
+    /* A half-published position is never a legitimate answer, so one flag
+     * gates both keys. Coordinates left in the struct while the app's own
+     * validity gate said no must not reach the wire at all. */
+    remote::AisVessel v;
+    v.mmsi = "244660320";
+    v.lat = 51.5;
+    v.lon = -0.25;
+
+    const std::string without = remote::to_json(v).dump();
+    CHECK(without.find("\"lat\"") == std::string::npos);
+    CHECK(without.find("\"lon\"") == std::string::npos);
+    CHECK(without.find("51.5") == std::string::npos);
+
+    v.pos_valid = true;
+    CHECK(remote::to_json(v).dump() ==
+          "{\"mmsi\":\"244660320\",\"lat\":51.5,\"lon\":-0.25,\"msgs\":0}");
+}
+
+TEST(ais_panel_keeps_a_zero_a_vessel_really_broadcast) {
+    /* The other half of the rule. A ship moored at 0.0 knots on course 000
+     * with navigational status 0 ("under way w/engine") has reported three
+     * real values, and dropping them as falsey would be the same lie in the
+     * opposite direction. 0N 0E is a real point in the Gulf of Guinea and a
+     * transponder can legitimately report it. */
+    remote::AisVessel v;
+    v.mmsi = "000000001";
+    v.pos_valid = true;
+    v.lat = 0.0;
+    v.lon = 0.0;
+    v.sog_kn = 0.0;
+    v.cog_deg = 0.0;
+    v.heading_deg = 0.0;
+    v.nav_status = 0;
+
+    CHECK(remote::to_json(v).dump() ==
+          "{\"mmsi\":\"000000001\",\"lat\":0,\"lon\":0,\"sog_kn\":0,"
+          "\"cog_deg\":0,\"heading_deg\":0,\"nav_status\":0,\"msgs\":0}");
+}
+
+TEST(ais_panel_payload_is_the_bare_vessels_and_stats_object) {
+    remote::PanelData p;
+    p.kind = PanelKind::Ais;
+    remote::AisVessel v;
+    v.mmsi = "244660320";
+    p.ais.vessels.push_back(v);
+
+    const std::string payload = remote::panel_payload(p).dump();
+    /* What GET /api/panel's `data` carries: no wrapper, no kind tag. */
+    CHECK(payload.rfind("{\"vessels\":[", 0) == 0);
+    CHECK(payload.find("\"kind\"") == std::string::npos);
+    CHECK(payload.find("\"ais\":") == std::string::npos);
+
+    /* And to_json(PanelData) is built ON that payload, so the two can never
+     * drift apart and start describing different data. */
+    CHECK(remote::to_json(p).dump() == "{\"kind\":\"ais\",\"ais\":" + payload + "}");
 }
 
 /* --- Table adapter: generic ui::RecentEntriesTable -> TableData ------------

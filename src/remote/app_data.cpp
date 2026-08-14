@@ -203,6 +203,7 @@ const char* panel_kind_name(PanelKind k) {
         case PanelKind::Screen: return "screen";
         case PanelKind::Image: return "image";
         case PanelKind::GeoTable: return "geotable";
+        case PanelKind::Ais: return "ais";
     }
     return "screen";
 }
@@ -321,6 +322,52 @@ JsonValue to_json(const AdsbData& a) {
     return v;
 }
 
+/* Every optional below is a key that is written or not written at all. There is
+ * no branch anywhere in here that substitutes a zero, an empty string or a
+ * sentinel for a value a vessel has not broadcast — see the AisVessel comment
+ * in app_data.hpp for why that is the load-bearing rule of this payload. */
+JsonValue to_json(const AisVessel& v) {
+    JsonValue j = JsonValue::object();
+    /* The key, and the only field that is unconditional. */
+    j.set("mmsi", JsonValue::string(v.mmsi));
+    if (!v.name.empty()) j.set("name", JsonValue::string(v.name));
+    if (!v.callsign.empty()) j.set("callsign", JsonValue::string(v.callsign));
+    if (!v.destination.empty()) j.set("destination", JsonValue::string(v.destination));
+
+    /* Both or neither: a lone latitude is not a position, and 0,0 is not
+     * "unknown". Unlike the ADS-B payload there is no has_pos companion — the
+     * keys' presence IS the answer, and the browser tests for lat. */
+    if (v.pos_valid) {
+        j.set("lat", JsonValue::number(v.lat));
+        j.set("lon", JsonValue::number(v.lon));
+    }
+
+    if (v.sog_kn.has_value()) j.set("sog_kn", JsonValue::number(*v.sog_kn));
+    if (v.cog_deg.has_value()) j.set("cog_deg", JsonValue::number(*v.cog_deg));
+    if (v.heading_deg.has_value()) j.set("heading_deg", JsonValue::number(*v.heading_deg));
+    if (v.nav_status.has_value()) j.set("nav_status", JsonValue::integer(*v.nav_status));
+
+    j.set("msgs", JsonValue::integer(v.msgs));
+    if (!v.time.empty()) j.set("time", JsonValue::string(v.time));
+    return j;
+}
+
+JsonValue to_json(const AisData& a) {
+    JsonValue v = JsonValue::object();
+
+    JsonValue list = JsonValue::array();
+    for (const auto& vessel : a.vessels) list.push_back(to_json(vessel));
+    v.set("vessels", std::move(list));
+
+    /* An object rather than a bare number, so the counts the app already keeps
+     * (CRC and length failures) can join it later without moving anything. */
+    JsonValue stats = JsonValue::object();
+    stats.set("packets_valid", JsonValue::integer(a.packets_valid));
+    v.set("stats", std::move(stats));
+
+    return v;
+}
+
 JsonValue to_json(const FormData& f) {
     JsonValue v = JsonValue::object();
     JsonValue fields = JsonValue::array();
@@ -400,6 +447,7 @@ JsonValue panel_payload(const PanelData& p, uint32_t have_image_rev) {
         case PanelKind::Screen: return to_json(p.screen);
         case PanelKind::Image: return to_json(p.image, have_image_rev);
         case PanelKind::GeoTable: return to_json(p.geotable);
+        case PanelKind::Ais: return to_json(p.ais);
     }
     return JsonValue::object();
 }

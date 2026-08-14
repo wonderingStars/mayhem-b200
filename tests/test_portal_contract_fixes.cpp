@@ -581,9 +581,9 @@ TEST(apps_json_advertises_the_panel_kind_each_provider_registered) {
     /* One app per distinct panel kind that a provider registers, so a single
      * kind wired up wrongly cannot hide behind the others. */
     const std::pair<const char*, const char*> expected[] = {
-        {"adsbrx", "adsb"},        {"pocsag", "console"},   {"ais", "geotable"},
-        {"noaaapt_rx", "image"},   {"wardrivemap", "map"},  {"ert", "table"},
-        {"audio", "receiver"},     {"lookingglass", "spectrum"},
+        {"adsbrx", "adsb"},        {"ais", "ais"},          {"pocsag", "console"},
+        {"aprsrx", "geotable"},    {"noaaapt_rx", "image"}, {"wardrivemap", "map"},
+        {"ert", "table"},          {"audio", "receiver"},   {"lookingglass", "spectrum"},
     };
     for (const auto& [id, kind] : expected) {
         const std::string obj = app_object(apps, id);
