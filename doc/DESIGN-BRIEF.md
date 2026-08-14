@@ -63,6 +63,7 @@ panels/
   registry.js       the panel registry (render(el,data))
   table.js          sortable decoder tables
   adsb.js   (75 KB) aircraft map on OpenStreetMap tiles — the showpiece
+  ais.js    (70 KB) vessel chart on the same tiles, for AIS RX
   map.js            generic marker map
   geotable.js       map + table composed
   spectrum.js       FFT / waterfall
