@@ -5,6 +5,7 @@
 package client
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -115,6 +116,35 @@ func (c *Client) Launch(ctx context.Context, id string) (CurrentApp, error) {
 	var resp CurrentApp
 	if err := c.do(ctx, "launch", http.MethodPost, path, nil, &resp); err != nil {
 		return CurrentApp{}, err
+	}
+	return resp, nil
+}
+
+// MorseTransmitResult is the reply from POST /api/morse/transmit: the C++
+// backend answers ok/error (with a keyed duration on success), and this
+// client relays it verbatim. ok:false is a refusal (no radio, busy, bad
+// frequency), not a transport error — the browser branches on Ok.
+type MorseTransmitResult struct {
+	Ok          bool   `json:"ok"`
+	Error       string `json:"error,omitempty"`
+	DurationMs  uint64 `json:"duration_ms,omitempty"`
+	FrequencyHz uint64 `json:"frequency_hz,omitempty"`
+}
+
+// MorseTransmit asks the device to key `text` as CW at `wpm`. This is the one
+// browser path that transmits; the backend's own gates decide whether it may.
+func (c *Client) MorseTransmit(ctx context.Context, text string, wpm int) (MorseTransmitResult, error) {
+	reqBody, err := json.Marshal(struct {
+		Text string `json:"text"`
+		Wpm  int    `json:"wpm"`
+	}{Text: text, Wpm: wpm})
+	if err != nil {
+		return MorseTransmitResult{}, err
+	}
+	var resp MorseTransmitResult
+	if err := c.do(ctx, "morse-transmit", http.MethodPost, "/api/morse/transmit",
+		bytes.NewReader(reqBody), &resp); err != nil {
+		return MorseTransmitResult{}, err
 	}
 	return resp, nil
 }

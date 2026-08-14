@@ -606,6 +606,46 @@ copies of it, and should be kept if these two files are ever unified:
   request goes through a `scheduleDraw` that coalesces on a 0 ms timeout as
   well as on the frame loop.
 
+### `morse`
+
+The Morse (CW) app — a live decoder AND the portal's one interactive-transmit
+panel.
+
+```jsonc
+{ "decoded_text": "CQ CQ DE M0ABC K ", "wpm": 18, "tone_hz": 700, "receiving": true }
+// nothing heard yet
+{ "decoded_text": "", "receiving": false }   // wpm and tone_hz ABSENT
+```
+
+`decoded_text` is always present (may be empty). `wpm` and `tone_hz` are
+omitted until the decoder has an estimate — absent stays absent, a 0 would read
+as a real reading. The RECEIVE half draws the running text plus wpm/tone
+readouts (shown only when present), painting on data arrival.
+
+The TRANSMIT half is the only panel path that keys the radio.
+`panels/morse.js` embeds a standard International Morse table: as the operator
+types, it shows the dots/dashes and can play them **locally** via Web Audio
+(keying nothing), then a Transmit button POSTs:
+
+```
+POST /api/morse/transmit   {"text": "CQ CQ DE M0ABC", "wpm": 18}
+  -> {"ok": true,  "duration_ms": 4200, "frequency_hz": 144200000}
+  -> {"ok": false, "error": "no transmit radio"}      // a refusal, HTTP 200
+```
+
+Every safety gate is on the C++ side (`src/remote/morse_tx.cpp`), never the
+browser: a request is refused unless a transmit-capable radio is open and
+idle, the text encodes, and the frequency the app is tuned to is inside the
+device's TX range — so on a B200, HF CW (below ~70 MHz) is refused with a
+clear message rather than faked. The endpoint only QUEUES; the actual keying
+runs on the UI thread in `morse_tx_tick` (from `AppBridge::refresh`), so the
+radio is never touched from two threads, and the waveform auto-stops at the
+end of the message. The panel disables Transmit, with a visible reason, unless
+`GET /api/status`'s `can_transmit` is true, and carries a persistent licensing
+warning: CW transmit is licensed almost everywhere and is the operator's
+responsibility. A refusal (`ok:false`) is the radio declining, not a transport
+error — the browser branches on `ok` and shows the reason.
+
 ### `image`
 
 The picture an image-producing RX app is building up — NOAA APT, WeFax, SSTV — at

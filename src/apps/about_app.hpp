@@ -113,7 +113,16 @@ namespace app {
  * GET /api/status carries audio_monitor. Keyfob's TX-readiness messaging is
  * honest now (it works on a B200 — verified on hardware — and reports the
  * radio's real error on failure instead of always blaming an absent B200). */
-constexpr const char* kVersion = "0.15.0";
+/* 0.16.0: the Morse app gets a native browser panel — a live CW decoder
+ * (received text, WPM, tone) AND a text-to-Morse transmitter. Typing shows the
+ * dots/dashes and can play them locally (Web Audio); a Transmit button keys
+ * the radio for real over the air via POST /api/morse/transmit. It is the
+ * portal's one interactive-transmit path: every safety gate is server-side
+ * (a transmit-capable idle radio, encodable text, a frequency in the device's
+ * TX range — so HF CW below the B200's ~70 MHz floor is refused honestly), the
+ * keying runs on the UI thread and auto-stops, and the panel carries the
+ * licensing warning. Verified on the B200: CW keyed at 144.2 MHz. */
+constexpr const char* kVersion = "0.16.0";
 
 class AboutView : public ui::View {
    public:

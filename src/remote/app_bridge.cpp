@@ -17,6 +17,8 @@
 
 #include "app_bridge.hpp"
 
+#include "morse_tx.hpp"
+
 #include "../apps/about_app.hpp"
 #include "../apps/app_context.hpp"
 #include "../apps/app_registry.hpp"
@@ -401,6 +403,11 @@ void AppBridge::refresh() {
     panel_cache_ = std::move(panel);
     can_go_back_ = can_go_back;
     status_json_cache_ = status.dump();
+
+    /* UI-thread heartbeat for the browser-driven Morse transmit: starts a
+     * queued keying and stops a finished one. All TransmitterModel calls stay
+     * on this thread — the endpoint only queues. */
+    morse_tx_tick();
 }
 
 bool AppBridge::drain_launch_queue() {

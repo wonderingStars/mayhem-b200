@@ -304,6 +304,16 @@ void MorseRadioView::write_char(const std::string& ch, double confidence) {
 
     console_.write(std::string{color} + ch);
 
+    /* Plain-text mirror for the browser panel, bounded to the most recent
+     * characters. '{...}' is the decoder's "unmatched sequence" marker; keep
+     * it out of the clean text a reader sees. */
+    if (ch[0] != '{') {
+        decoded_history_ += ch;
+        constexpr size_t kMaxHistory = 400;
+        if (decoded_history_.size() > kMaxHistory)
+            decoded_history_.erase(0, decoded_history_.size() - kMaxHistory);
+    }
+
     auto& f = log_stream();
     if (f.is_open()) {
         f << ch;
@@ -312,6 +322,8 @@ void MorseRadioView::write_char(const std::string& ch, double confidence) {
 }
 
 void MorseRadioView::update_tone_readout(uint32_t hz) {
+    last_tone_hz_ = hz; /* published to the browser panel; 0 means no lock */
+
     /* Port of on_freq(): clamp to the detector's 300..2300 Hz range and colour
      * by how close the tone is to the 400..1400 Hz sweet spot. */
     std::string prefix = " ";

@@ -102,6 +102,8 @@
          pointing north), and two heard only through a message carrying no
          position at all -- those belong in the table and NOT on the chart. -->
     <button data-fixture="ais" data-kind="ais">ais (vessel chart)</button>
+    <button data-fixture="morse" data-kind="morse">morse (decode + TX)</button>
+    <button data-fixture="morse_empty" data-kind="morse">morse (nothing heard)</button>
     <button data-fixture="ais_empty" data-kind="ais">ais (nothing heard)</button>
     <button data-fixture="image" data-kind="image">image (decoded frame)</button>
     <!-- Click "image" first, then this: same rev with data_b64 omitted is what
@@ -145,6 +147,7 @@
 <script src="server/static/panels/map.js"></script>
 <script src="server/static/panels/adsb.js"></script>
 <script src="server/static/panels/ais.js"></script>
+<script src="server/static/panels/morse.js"></script>
 <script src="server/static/panels/image.js"></script>
 <script src="server/static/panels/geotable.js"></script>
 <script src="server/static/panels/screen.js"></script>

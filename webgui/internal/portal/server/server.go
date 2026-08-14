@@ -44,6 +44,8 @@ type Backend interface {
 	// (empty = omit the parameter). See client.Client.Panel.
 	Panel(ctx context.Context, haveImageRev string) (client.Panel, error)
 	Status(ctx context.Context) (client.Status, error)
+	// MorseTransmit keys CW from the browser Morse panel; see client.Client.
+	MorseTransmit(ctx context.Context, text string, wpm int) (client.MorseTransmitResult, error)
 	// Screen and Input are the framebuffer mirror, contracts 1 and 2; the
 	// live screen view is built on them (see screen.go). They are part of
 	// this interface rather than an optional one a Backend may or may not
@@ -123,6 +125,7 @@ func (s *Server) routes() {
 	mux.HandleFunc("GET /api/screen", s.handleScreen)
 	mux.HandleFunc("GET /api/screen/ws", s.handleScreenWS)
 	mux.HandleFunc("POST /api/input", s.handleInput)
+	mux.HandleFunc("POST /api/morse/transmit", s.handleMorseTransmit)
 
 	// The basemap tile proxy is mounted unconditionally, even when tiles
 	// are disabled: a disabled proxy answers 503 JSON, whereas an absent
@@ -183,6 +186,28 @@ func (s *Server) handleHome(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, cur)
+}
+
+// handleMorseTransmit proxies the Morse panel's Transmit button to the C++
+// backend, which owns every safety gate (transmit-capable idle radio, a legal
+// frequency, encodable text). A refusal comes back as ok:false with 200 — the
+// request was answered, the radio just declined — so this relays the backend's
+// JSON verbatim rather than turning ok:false into an HTTP error.
+func (s *Server) handleMorseTransmit(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Text string `json:"text"`
+		Wpm  int    `json:"wpm"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeJSON(w, http.StatusBadRequest, errorResponse{Error: "expected {\"text\":\"...\",\"wpm\":N}"})
+		return
+	}
+	res, err := s.backend.MorseTransmit(r.Context(), body.Text, body.Wpm)
+	if err != nil {
+		s.writeBackendError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, res)
 }
 
 // handlePanel proxies GET /api/panel, forwarding contract 4's

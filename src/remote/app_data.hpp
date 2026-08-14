@@ -103,6 +103,7 @@ enum class PanelKind : uint8_t {
     Image,
     GeoTable,
     Ais,
+    Morse,
 };
 const char* panel_kind_name(PanelKind k);
 
@@ -178,6 +179,17 @@ struct ConsoleData {
     std::vector<std::string> lines;
 };
 JsonValue to_json(const ConsoleData& c);
+
+/* The Morse (CW) decoder's live output, for the browser panel. wpm/tone are
+ * omitted on the wire when the decoder has no estimate, so absent stays
+ * absent — a 0 wpm or 0 Hz would read as a real reading. */
+struct MorseData {
+    std::string decoded_text{};
+    uint16_t wpm{0};        /* 0 => omit */
+    uint32_t tone_hz{0};    /* 0 => omit */
+    bool receiving{false};
+};
+JsonValue to_json(const MorseData& m);
 
 struct MapMarker {
     double lat{0.0};
@@ -410,6 +422,7 @@ struct PanelData {
     ScreenData screen{};
     ImageData image{};
     GeoTableData geotable{};
+    MorseData morse{};
 };
 JsonValue to_json(const PanelData& p);
 

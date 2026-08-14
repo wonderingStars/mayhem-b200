@@ -284,3 +284,47 @@ func TestRealHTTPServer_ServesAPIAndAssets(t *testing.T) {
 		t.Fatalf("status = %d, want 200", res2.StatusCode)
 	}
 }
+
+// The Morse panel's Transmit button is the one browser path that keys the
+// radio, so the proxy must forward the operator's exact text/wpm and relay
+// the backend's answer verbatim — including a refusal (ok:false), which is
+// the radio declining, not a transport error.
+func TestMorseTransmitForwardsAndRelays(t *testing.T) {
+	fb := &fakeBackend{morseResult: client.MorseTransmitResult{Ok: true, DurationMs: 4200, FrequencyHz: 144200000}}
+	srv := New(fb)
+
+	rr := httptest.NewRecorder()
+	srv.ServeHTTP(rr, httptest.NewRequest(http.MethodPost, "/api/morse/transmit",
+		bytes.NewReader([]byte(`{"text":"CQ CQ DE M0ABC","wpm":22}`))))
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rr.Code)
+	}
+	if fb.morseText != "CQ CQ DE M0ABC" || fb.morseWpm != 22 {
+		t.Errorf("backend got text=%q wpm=%d, want the operator's exact input", fb.morseText, fb.morseWpm)
+	}
+	got := decodeBody[client.MorseTransmitResult](t, rr)
+	if !got.Ok || got.DurationMs != 4200 {
+		t.Errorf("relayed %+v, want the backend's ok:true / 4200 ms", got)
+	}
+}
+
+func TestMorseTransmitRelaysARefusal(t *testing.T) {
+	// A receive-only or busy radio answers ok:false with a reason. That is a
+	// 200 with the reason intact, not an HTTP error — the browser branches on
+	// Ok and shows the string.
+	fb := &fakeBackend{morseResult: client.MorseTransmitResult{Ok: false, Error: "no transmit radio"}}
+	srv := New(fb)
+
+	rr := httptest.NewRecorder()
+	srv.ServeHTTP(rr, httptest.NewRequest(http.MethodPost, "/api/morse/transmit",
+		bytes.NewReader([]byte(`{"text":"CQ","wpm":18}`))))
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (a refusal is still a well-formed answer)", rr.Code)
+	}
+	got := decodeBody[client.MorseTransmitResult](t, rr)
+	if got.Ok || got.Error != "no transmit radio" {
+		t.Errorf("relayed %+v, want ok:false with the reason preserved", got)
+	}
+}

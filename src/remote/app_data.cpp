@@ -204,6 +204,7 @@ const char* panel_kind_name(PanelKind k) {
         case PanelKind::Image: return "image";
         case PanelKind::GeoTable: return "geotable";
         case PanelKind::Ais: return "ais";
+        case PanelKind::Morse: return "morse";
     }
     return "screen";
 }
@@ -294,6 +295,15 @@ JsonValue to_json(const ConsoleData& c) {
     JsonValue lines = JsonValue::array();
     for (const auto& l : c.lines) lines.push_back(JsonValue::string(l));
     v.set("lines", std::move(lines));
+    return v;
+}
+
+JsonValue to_json(const MorseData& m) {
+    JsonValue v = JsonValue::object();
+    v.set("decoded_text", JsonValue::string(m.decoded_text));
+    if (m.wpm > 0) v.set("wpm", JsonValue::integer(m.wpm));
+    if (m.tone_hz > 0) v.set("tone_hz", JsonValue::integer(m.tone_hz));
+    v.set("receiving", JsonValue::boolean(m.receiving));
     return v;
 }
 
@@ -482,6 +492,7 @@ JsonValue panel_payload(const PanelData& p, uint32_t have_image_rev) {
         case PanelKind::Spectrum: return to_json(p.spectrum);
         case PanelKind::Receiver: return to_json(p.receiver);
         case PanelKind::Console: return to_json(p.console);
+        case PanelKind::Morse: return to_json(p.morse);
         case PanelKind::Map: return to_json(p.map);
         case PanelKind::Adsb: return to_json(p.adsb);
         case PanelKind::Form: return to_json(p.form);

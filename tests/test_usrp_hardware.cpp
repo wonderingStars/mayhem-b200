@@ -28,6 +28,10 @@
 
 #include "usrp_radio.hpp"
 #include "transmitter_model.hpp"
+#include "receiver_model.hpp"
+#include "audio_out.hpp"
+#include "app_context.hpp"
+#include "morse_tx.hpp"
 
 #include "../src/dsp/fft.hpp"
 
@@ -406,5 +410,73 @@ TEST(usrp_hw_keyfob_style_tx_path_starts_and_runs) {
     CHECK(sent > 100'000);
 
     tx.stop();
+    r.close();
+}
+
+/* --- Browser-driven Morse CW transmit, end to end on hardware ---------------
+ *
+ * The Morse panel's Transmit button POSTs to /api/morse/transmit, which queues
+ * a keying that AppBridge::refresh() (the UI thread) starts via morse_tx_tick.
+ * This drives that exact path against the real B200: wire the globals the
+ * service reads, request a transmit, pump the tick, and require tx_samples to
+ * climb — the CW envelope really reaching the DAC. 2.4 m band, minimum gain,
+ * no antenna: the point is that the keyed waveform transmits, not that it
+ * radiates. */
+TEST(usrp_hw_morse_browser_transmit_keys_the_radio) {
+    if (!hw_tests_enabled()) return;
+
+    radio::UsrpRadio r;
+    CHECK(open_with_retry(r));
+    if (!r.is_open()) return;
+
+    audio::AudioOut audio;
+    radio::ReceiverModel receiver{r, audio};
+    radio::TransmitterModel transmitter{r};
+    /* 144.2 MHz (2 m CW). Deliberately NOT an HF CW band: the B200 cannot tune
+     * its RF below ~70 MHz, so HF CW is out of reach and the transmit path
+     * refuses it with a clear message. VHF/UHF CW is where a B200 can key. */
+    receiver.set_target_frequency(144'200'000);
+    r.set_tx_gain(r.caps().tx_gain.min);
+
+    radio::RadioDevice* sr = app::globals().radio;
+    radio::ReceiverModel* srx = app::globals().receiver;
+    radio::TransmitterModel* stx = app::globals().transmitter;
+    app::globals().radio = &r;
+    app::globals().receiver = &receiver;
+    app::globals().transmitter = &transmitter;
+
+    const remote::MorseTxResult res = remote::morse_tx_request("CQ CQ DE M0ABC K", 24);
+    std::printf("  morse tx request: ok=%d duration_ms=%llu freq=%llu err=%s\n",
+                res.ok, (unsigned long long)res.duration_ms,
+                (unsigned long long)res.frequency_hz, res.error.c_str());
+    CHECK(res.ok);
+
+    if (res.ok) {
+        /* Pump the UI-thread tick until it starts keying, then until it stops
+         * on its own at the end of the message. */
+        for (int i = 0; i < 200 && !remote::morse_tx_active(); i++) {
+            remote::morse_tx_tick();
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+        CHECK(remote::morse_tx_active());
+
+        std::this_thread::sleep_for(std::chrono::seconds(2));
+        const uint64_t tx_samples = r.stats().tx_samples.load();
+        std::printf("  morse tx: %llu samples after 2s (active=%d)\n",
+                    (unsigned long long)tx_samples, remote::morse_tx_active());
+        CHECK(tx_samples > 100'000);
+
+        /* Let it finish and confirm the tick stops it cleanly. */
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(15);
+        while (remote::morse_tx_active() && std::chrono::steady_clock::now() < deadline) {
+            remote::morse_tx_tick();
+            std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        }
+        CHECK(!remote::morse_tx_active());
+    }
+
+    app::globals().radio = sr;
+    app::globals().receiver = srx;
+    app::globals().transmitter = stx;
     r.close();
 }

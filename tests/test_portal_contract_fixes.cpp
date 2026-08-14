@@ -589,6 +589,7 @@ TEST(apps_json_advertises_the_panel_kind_each_provider_registered) {
         {"aprsrx", "geotable"},    {"noaaapt_rx", "image"}, {"wardrivemap", "map"},
         {"ert", "table"},          {"audio", "receiver"},   {"lookingglass", "spectrum"},
         {"epirb_rx", "geotable"},  {"radiosonde", "geotable"},
+        {"morseradio", "morse"},
     };
     for (const auto& [id, kind] : expected) {
         const std::string obj = app_object(apps, id);

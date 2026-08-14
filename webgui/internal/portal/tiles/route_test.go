@@ -39,6 +39,9 @@ func (stubBackend) Launch(context.Context, string) (client.CurrentApp, error) {
 func (stubBackend) Home(context.Context) (client.CurrentApp, error)     { return client.CurrentApp{}, nil }
 func (stubBackend) Panel(context.Context, string) (client.Panel, error) { return client.Panel{}, nil }
 func (stubBackend) Status(context.Context) (client.Status, error)       { return client.Status{}, nil }
+func (stubBackend) MorseTransmit(context.Context, string, int) (client.MorseTransmitResult, error) {
+	return client.MorseTransmitResult{}, nil
+}
 
 // The framebuffer mirror (server.Backend's Screen/Input, contracts 1 and 2)
 // is not exercised by the tile route tests: this stub answers "no frame yet"

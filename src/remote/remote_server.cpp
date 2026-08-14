@@ -9,6 +9,9 @@
 
 #include "app_bridge.hpp"
 #include "app_data.hpp"
+#include "morse_tx.hpp"
+
+#include "../radio/network_radio.hpp"  /* radio::net::json_parse for request bodies */
 
 #include "../apps/app_registry.hpp"
 
@@ -429,6 +432,36 @@ void route(socket_t client, const HttpRequest& req) {
             JsonValue v = JsonValue::object();
             v.set("queued", JsonValue::number(static_cast<double>(events.size() - self_evicted)));
             v.set("dropped", JsonValue::number(static_cast<double>(dropped + self_evicted)));
+            send_response(client, 200, kJson, v.dump());
+        }
+    } else if (req.method == "POST" && req.path == "/api/morse/transmit") {
+        /* The one panel path that keys the radio. Parse {text, wpm}; the
+         * safety gates (a transmit-capable, idle radio; a legal frequency;
+         * text that encodes) live in morse_tx_request, which only QUEUES —
+         * the actual keying is on the UI thread in morse_tx_tick. */
+        radio::net::JsonValue root;
+        std::string parse_err;
+        if (!radio::net::json_parse(req.body, root, parse_err)) {
+            send_json_error(client, 400, "expected {\"text\":\"...\",\"wpm\":N}");
+        } else {
+            const auto* t = root.find("text");
+            const auto* w = root.find("wpm");
+            const std::string text = (t != nullptr) ? t->as_string("") : "";
+            const uint16_t wpm =
+                (w != nullptr) ? static_cast<uint16_t>(w->as_number(18.0)) : 18;
+
+            const MorseTxResult r = morse_tx_request(text, wpm);
+            JsonValue v = JsonValue::object();
+            v.set("ok", JsonValue::boolean(r.ok));
+            if (r.ok) {
+                v.set("duration_ms", JsonValue::integer(static_cast<int64_t>(r.duration_ms)));
+                v.set("frequency_hz", JsonValue::integer(static_cast<int64_t>(r.frequency_hz)));
+            } else {
+                v.set("error", JsonValue::string(r.error));
+            }
+            /* 200 with ok:false for a refusal (no radio, busy, bad freq): the
+             * request was well-formed and answered, the browser branches on
+             * ok. A malformed body is the only 4xx above. */
             send_response(client, 200, kJson, v.dump());
         }
     } else if (req.method == "POST" && req.path == "/api/apps/home") {

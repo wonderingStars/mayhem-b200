@@ -776,6 +776,14 @@ class MorseRadioView : public ui::View {
 
     std::string title() const override { return "Morse"; }
 
+    /* --- Read surface for the browser panel (provider_morse.cpp) ------------
+     * All read on the UI thread, same thread write_char/on_frame_sync run on
+     * (AppBridge::refresh() is UI-thread-only by contract), so no lock. */
+    const std::string& decoded_text() const { return decoded_history_; }
+    uint16_t decoded_wpm() const { return decoder_.wpm(); }
+    uint32_t decoded_tone_hz() const { return last_tone_hz_; }
+    bool receiving() const { return receiver_.running(); }
+
     void focus() override;
     void on_show() override;
     void on_hide() override;
@@ -806,6 +814,12 @@ class MorseRadioView : public ui::View {
 
     int32_t mode_{MORSE_AM_CW};
     uint32_t frame_counter_{0};
+
+    /* Plain decoded text (no colour markup) for the browser panel, bounded to
+     * the most recent characters; the device's own console keeps the coloured
+     * full history. Last locked tone, 0 when none. */
+    std::string decoded_history_{};
+    uint32_t last_tone_hz_{0};
     uint32_t quiet_frames_{0};
 
     /* Host channel chain. There is no channel tap on radio::ReceiverModel, so

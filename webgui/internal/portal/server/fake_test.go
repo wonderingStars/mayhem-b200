@@ -19,6 +19,10 @@ import (
 // *client.Client pointed at an httptest server, since writeBackendError's
 // whole job is unwrapping that concrete type).
 type fakeBackend struct {
+	morseResult client.MorseTransmitResult
+	morseErr    error
+	morseText   string
+	morseWpm    int
 	apps       []client.App
 	appsErr    error
 	current    client.CurrentApp
@@ -71,6 +75,12 @@ func (f *fakeBackend) Panel(ctx context.Context, haveImageRev string) (client.Pa
 }
 func (f *fakeBackend) Status(ctx context.Context) (client.Status, error) {
 	return f.status, f.statusErr
+}
+
+func (f *fakeBackend) MorseTransmit(ctx context.Context, text string, wpm int) (client.MorseTransmitResult, error) {
+	f.morseText = text
+	f.morseWpm = wpm
+	return f.morseResult, f.morseErr
 }
 
 func (f *fakeBackend) Screen(ctx context.Context, after uint32, waitMS int) (client.ScreenFrame, bool, error) {

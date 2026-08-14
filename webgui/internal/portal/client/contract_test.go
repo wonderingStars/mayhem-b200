@@ -309,6 +309,7 @@ func TestContract_AppsCarryPanelKindForAppsThatHaveAProvider(t *testing.T) {
 		"lookingglass": "spectrum",
 		"epirb_rx":     "geotable",
 		"radiosonde":   "geotable",
+		"morseradio":   "morse",
 	}
 	seen := map[string]bool{}
 	for _, a := range resp.Apps {
