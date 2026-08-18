@@ -16,7 +16,6 @@
 
 #include "test_main.hpp"
 
-#include <process.h> /* _getpid: shared-temp names must be unique PER PROCESS */
 
 #include "display.hpp"
 #include "file_path.hpp"
@@ -54,7 +53,7 @@ std::filesystem::path temp_map_path(const char* name) {
      * overwrite each other's fixtures mid-test -- observed 2026-08-13 as
      * intermittent read-back failures with the binary md5-pinned. */
     return std::filesystem::temp_directory_path() /
-           (std::to_string(_getpid()) + "_" + name);
+           (std::to_string(mb200test::test_pid()) + "_" + name);
 }
 
 void write_map_file(const std::filesystem::path& path,

@@ -21,7 +21,6 @@
 
 #include "test_main.hpp"
 
-#include <process.h> /* _getpid: shared-temp names must be unique PER PROCESS */
 
 #include <cstdint>
 #include <cstring>
@@ -40,7 +39,7 @@ std::string temp_path(const char* name) {
     std::error_code ec;
     /* Per-process subdir; see the PID note in the other test fixtures. */
     auto dir = std::filesystem::temp_directory_path(ec) /
-               ("mb200_media_io_" + std::to_string(_getpid()));
+               ("mb200_media_io_" + std::to_string(mb200test::test_pid()));
     std::filesystem::create_directories(dir, ec);
     return (dir / name).string();
 }

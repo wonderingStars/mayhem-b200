@@ -13,6 +13,8 @@
 
 #include "string_format.hpp"
 
+#include <string_view>
+
 TEST(dec_uint_basic) {
     CHECK_STR_EQ(to_string_dec_uint(0u), "0");
     CHECK_STR_EQ(to_string_dec_uint(7u), "7");
@@ -112,8 +114,15 @@ TEST(trim_and_truncate) {
     CHECK_STR_EQ(trim("  hello  "), "hello");
     CHECK_STR_EQ(trim("   "), "");
     CHECK_STR_EQ(trimr("hello   "), "hello");
-    CHECK_STR_EQ(truncate("abcdef", 3), "abc");
-    CHECK_STR_EQ(truncate("ab", 5), "ab");
+    /* The string_view is spelled out because POSIX declares its own
+     * truncate(const char*, off_t) at global scope, exactly where this
+     * project's truncate() lives. Given a bare string literal, overload
+     * resolution prefers the C one (no user-defined conversion needed), it
+     * returns int, and the Linux build fails on "conversion from int to
+     * std::string". Production code is unaffected -- every call site in src/
+     * passes a std::string, which cannot convert to const char*. */
+    CHECK_STR_EQ(truncate(std::string_view{"abcdef"}, 3), "abc");
+    CHECK_STR_EQ(truncate(std::string_view{"ab"}, 5), "ab");
 }
 
 TEST(binary_formatting) {

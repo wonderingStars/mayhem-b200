@@ -158,7 +158,13 @@ namespace app {
  * swallow, and a tray icon carries Show window / Quit — the local control a
  * hidden window would otherwise have none of. The launchers start everything
  * in the background. */
-constexpr const char* kVersion = "0.19.0";
+/* 0.19.1: fixes the Linux build, reported by the first outside user who tried
+ * to compile it. Two independent breaks, both in tests/: <process.h> is
+ * MSVC-only (POSIX is <unistd.h>/getpid), and a bare string literal passed to
+ * truncate() bound to POSIX truncate(const char*, off_t) instead of this
+ * project's global-scope truncate(string_view, size_t). Verified by building
+ * and running the full suite on Ubuntu 26.04 / g++ 15.2. */
+constexpr const char* kVersion = "0.19.1";
 
 class AboutView : public ui::View {
    public:

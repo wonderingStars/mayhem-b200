@@ -12,7 +12,6 @@
 
 #include "test_main.hpp"
 
-#include <process.h> /* _getpid: shared-temp names must be unique PER PROCESS */
 
 #include "settings.hpp"
 
@@ -36,7 +35,7 @@ std::string temp_path(const char* name) {
      * (one per git worktree is normal here). Concurrent suites then delete or
      * overwrite each other's fixtures mid-test -- observed 2026-08-13 as
      * intermittent read-back failures with the binary md5-pinned. */
-    return (dir / (std::to_string(_getpid()) + "_" + name)).string();
+    return (dir / (std::to_string(mb200test::test_pid()) + "_" + name)).string();
 }
 
 /* Deletes its file on the way in and on the way out, so a crashed run does not

@@ -19,7 +19,6 @@
 
 #include "test_main.hpp"
 
-#include <process.h> /* _getpid: see kStem */
 
 #include "file_path.hpp"
 #include "freqman_db.hpp"
@@ -67,7 +66,7 @@ void swap_entries(core::FreqmanDB& db, size_t i, size_t j) {
  * another's live fixture mid-test. Observed 2026-08-13 in a two-process
  * verification run: both suites failed in these tests simultaneously with
  * each seeing the other's entry counts. */
-static const std::string kStem = "__mb200_freqman_app_test_" + std::to_string(_getpid());
+static const std::string kStem = "__mb200_freqman_app_test_" + std::to_string(mb200test::test_pid());
 
 struct ScopedList {
     ScopedList() { core::delete_freqman_file(kStem); }

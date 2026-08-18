@@ -18,7 +18,30 @@
 #include <string>
 #include <vector>
 
+#if defined(_WIN32)
+#include <process.h>  /* _getpid */
+#else
+#include <unistd.h>   /* getpid */
+#endif
+
 namespace mb200test {
+
+/* The current process id, spelled portably.
+ *
+ * Fixture files and directories are created under a shared temp directory, so
+ * their names have to be unique per process or two test binaries running at
+ * once tread on each other. MSVC spells this _getpid() and declares it in
+ * <process.h>; POSIX spells it getpid() in <unistd.h> and has no <process.h>
+ * at all -- which is exactly what broke the Linux build for the first outside
+ * user who tried it (reported 2026-08-14: "Missing process.h"). Kept in one
+ * place so no test has to care again. */
+inline int test_pid() {
+#if defined(_WIN32)
+    return _getpid();
+#else
+    return static_cast<int>(getpid());
+#endif
+}
 
 struct TestCase {
     std::string name;
