@@ -443,6 +443,9 @@ locally in `telemetry_id`), the app version, and the OS name — no personal dat
 no hostname, no location, and the server is told not to log the IP. It runs
 detached with a short timeout and can never block or crash startup.
 
-It is **opt-out**: run with `--no-telemetry` to disable it. Stock builds ship
-with the endpoint unset and therefore send nothing at all until a maintainer
-configures and deploys their own Worker.
+It is **opt-out**: run with `--no-telemetry` to disable it.
+
+**The official releases on this repository have the endpoint set and do send
+this ping.** Building from source sends nothing unless you set
+`core::telemetry::kTelemetryEndpoint` to a Worker of your own, so a fork
+reports to nobody by default.

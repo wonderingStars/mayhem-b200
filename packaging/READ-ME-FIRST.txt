@@ -13,6 +13,21 @@ You do NOT need to install UHD, Boost, or Visual Studio to run this. Everything
 required is in this folder.
 
 
+ANONYMOUS USAGE COUNT
+---------------------
+Once a day this sends one small ping so the author can tell how many people
+actually use it. It contains only:
+
+  - a random id this copy made up on first run and saved next to the app
+  - the version (e.g. 0.19.1)
+  - the OS name (e.g. windows)
+
+That is everything. No name, no email, no hostname, no location, no serial
+number, and no IP address is recorded. It cannot slow down or break the app.
+
+To turn it off, run it as:  mayhem-b200.exe --no-telemetry
+
+
 FIRST RUN — ONE-TIME DRIVER STEP (required)
 -------------------------------------------
 Windows needs a "WinUSB" driver bound to the B200 before any SDR software
